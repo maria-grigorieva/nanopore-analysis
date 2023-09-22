@@ -1,0 +1,3 @@
+docker build -t aptamer_search .
+
+docker run -v /Users/maria/PycharmProjects/nanopore/barcode04:/app/barcode04 aptamer_search --input /app/barcode04 --ref TTACGTATT --pos 0 --save False

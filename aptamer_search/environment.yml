@@ -1,0 +1,11 @@
+name: nanopore
+channels:
+  - defaults
+dependencies:
+  - python=3.10.12
+  - pandas
+  - numpy
+  - matplotlib
+  - biopython
+  - openpyxl
+prefix: /opt/conda/envs/nanopore
