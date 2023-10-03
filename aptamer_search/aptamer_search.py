@@ -298,6 +298,8 @@ def move_slicing_window(seq_list,
             write_steps_excel(freq, reference, writer)
         candidates.append(highest_probability_sequence(freq))
         probabilities.append(freq)
+        print('Save plots with frequencies')
+        plot_probabilities(freq, reference)
 
 
 def highest_probability_sequence(df):
