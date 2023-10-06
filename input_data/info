@@ -1,11 +1,17 @@
-Primer Left   : CTCCTCTGACTGTAACCACG (99)
-Primer Left Complementary : CGTGGTTACAGTCAGAGGAG (51)
+[PL] Primer Left   : CTCCTCTGACTGTAACCACG (99)
+[C/PL] Primer Left Complementary : CGTGGTTACAGTCAGAGGAG (51)
 
-Primer Right  : GCATAGGTAGTCCAGAAGCC (60)
-Primer Right Complementary : GGCTTCTGGACTACCTATGC (95)
+[PR] Primer Right  : GGCTTCTGGACTACCTATGC (95)
+[C/PR] Primer Right Complementary : GCATAGGTAGTCCAGAAGCC (60)
 
-Aptamer       : TAGGGAAACACGATAGAATCCGAACAGCACC (72)
-Aptamer Complementary : GGTGCTGTTCGGATTCTATCGTGTTTCCCTA (13)
+[A] Aptamer       : TAGGGAAACACGATAGAATCCGAACAGCACC (72)
+[C/A] Aptamer Complementary : GGTGCTGTTCGGATTCTATCGTGTTTCCCTA (13)
+
+Primers Concatenation
+[C/PR --- PR] GAAGCC --- GGCTTC (83)
+[C/PL --- PL] GAGGAG --- CTCCTC (11)
+
 
 Search example:
 grep -o 'GGCTTCTGGACTACCTATGC' *.fastq | wc -l
+
