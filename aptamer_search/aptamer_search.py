@@ -2,6 +2,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
 from Bio import SeqIO
+from Bio.Seq import Seq
 import glob
 import re
 import argparse
@@ -39,6 +40,8 @@ os.makedirs(PLOTS_DIR, exist_ok=True)
 REFERENCE_LENGTH = args.reflen
 SAVE = args.save
 
+PR = 'GGCTTCTGGACTACCTATGC'
+C_PR = 'GCATAGGTAGTCCAGAAGCC'
 
 def main():
 
@@ -46,7 +49,7 @@ def main():
 
     if args.ref == 'auto' and args.pos == -1:
         ref, pos = auto_reference(seq_list, offset = 1)
-        INIT_REFERENCE = {'seq': ref, 'start_pos': pos}
+        INIT_REFERENCE = {'seq': ref, 'start_pos': pos }
     else:
         INIT_REFERENCE = {'seq': args.ref, 'start_pos': args.pos}
 
@@ -138,12 +141,12 @@ def main():
                 merged_data[row] = df.loc[row]  # Create the row in the merged_data dictionary
             else:
                 # Compare the probabilities element-wise and keep the maximum values
-                merged_data[row] = pd.concat([merged_data[row], df.loc[row]], axis=1).max(axis=1)
+                merged_data[row] = pd.concat([merged_data[row], df.loc[row]], axis=1).median(axis=1)
 
     # Convert the merged data dictionary back to a DataFrame
     merged_df = pd.DataFrame(merged_data).T
 
-    result = highest_probability_sequence(merged_df)
+    result = highest_probability_sequence(merged_df.copy())
     plot_probabilities(merged_df, {'seq':result, 'start_pos':0})
     print(f'''Found candidate with reference {INIT_REFERENCE['seq']} at position {INIT_REFERENCE['start_pos']}:
             {result[:PRIMER_LENGTH]}---
@@ -202,10 +205,19 @@ def select_ref_sequencies(seq_list, reference):
     for seq in seq_list:
         matches = re.findall(pattern, seq)
         for match in matches:
-            result.append(match)
+            if not detect_primers_gluing(seq):
+                result.append(match)
 
     return np.array([list(s) for s in result])
 
+
+def detect_primers_gluing(ref, length=6):
+    pr = ref[:length]
+    c_pr = ref[-length:]
+    if c_pr + pr in ref:
+        return True
+    else:
+        False
 
 def calculate_probabilities(matrix):
     """
@@ -298,8 +310,8 @@ def move_slicing_window(seq_list,
             write_steps_excel(freq, reference, writer)
         candidates.append(highest_probability_sequence(freq))
         probabilities.append(freq)
-        print('Save plots with frequencies')
-        plot_probabilities(freq, reference)
+        # print('Save plots with frequencies')
+        # plot_probabilities(freq, reference)
 
 
 def highest_probability_sequence(df):
