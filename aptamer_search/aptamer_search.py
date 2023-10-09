@@ -123,60 +123,73 @@ def main():
             merged_data[row] = df.loc[row] if row not in merged_data else \
                 pd.concat([merged_data[row], df.loc[row]], axis=1)
 
-    if SAVE:
-        fname = f'''output_{INIT_REFERENCE['seq']}'''
-        output_writer = pd.ExcelWriter(f'{OUTPUT_DIR}/{fname}.xlsx')
+    fname = f'''output_{INIT_REFERENCE['seq']}'''
+    output_writer = pd.ExcelWriter(f'{OUTPUT_DIR}/{fname}.xlsx')
 
     print(f'Calculating statistics...')
-    final_composition = []
+    final_composition_median = {}
+    final_composition_low = {}
+    final_composition_high = {}
     for row in ['A', 'C', 'G', 'T']:
         # Transpose the merged data for the row
         transposed_data = merged_data[row].transpose()
         transposed_data.reset_index(drop=True, inplace=True)
-        if SAVE:
-            transposed_data.to_excel(output_writer,
-                                     sheet_name=f"{row}",
-                                     index=True,
-                                     header=True)
-            stats = transposed_data.describe()
-            stats.to_excel(output_writer,
-                            sheet_name=f"{row}-stats",
+        transposed_data.to_excel(output_writer,
+                                 sheet_name=f"{row}",
+                                 index=True,
+                                 header=True)
+        stats = transposed_data.describe()
+        stats.to_excel(output_writer,
+                        sheet_name=f"{row}-stats",
+                        index=True,
+                        header=True)
+        final_composition_low[row] = stats.iloc[4].to_numpy()
+        final_composition_median[row] = stats.iloc[5].to_numpy()
+        final_composition_high[row] = stats.iloc[6].to_numpy()
+
+    final_composition_low_df = pd.DataFrame(final_composition_low).T
+    final_composition_median_df = pd.DataFrame(final_composition_median).T
+    final_composition_high_df = pd.DataFrame(final_composition_high).T
+
+    final_composition_low_df.to_excel(output_writer,
+                            sheet_name="final-composition-low",
                             index=True,
                             header=True)
-            final_composition.append(stats.iloc[5].values)
-    final_composition_df = pd.DataFrame(final_composition, index=['A', 'C', 'G', 'T'])
-    final_composition_df.to_excel(output_writer,
-                            sheet_name="final-composition",
+    final_composition_median_df.to_excel(output_writer,
+                            sheet_name="final-composition-median",
                             index=True,
                             header=True)
-    if SAVE:
-        output_writer.close()
+    final_composition_high_df.to_excel(output_writer,
+                            sheet_name="final-composition-high",
+                            index=True,
+                            header=True)
+    output_writer.close()
 
-    print('Infer the sequence having the highest probability:')
-    for df in probabilities:
-        # Iterate over each row
-        for row in ['A', 'C', 'G', 'T']:
-            # Check if the row exists in the merged data
-            if row not in merged_data:
-                merged_data[row] = df.loc[row]  # Create the row in the merged_data dictionary
-            else:
-                # Compare the probabilities element-wise and keep the maximum values
-                merged_data[row] = pd.concat([merged_data[row], df.loc[row]], axis=1).quantile(q=0.75, axis=1)
+    print('Infer the sequence having 0.25 probability:')
+    result = highest_probability_sequence(final_composition_low_df.copy())
+    plot_probabilities(final_composition_low_df, {'seq':result, 'start_pos':0}, '0.25')
+    print_result(result, INIT_REFERENCE)
 
-    # Convert the merged data dictionary back to a DataFrame
-    merged_df = pd.DataFrame(merged_data).T
+    print('Infer the sequence having median probability:')
+    result = highest_probability_sequence(final_composition_median_df.copy())
+    plot_probabilities(final_composition_median_df, {'seq':result, 'start_pos':0}, 'median')
+    print_result(result, INIT_REFERENCE)
 
-    result = highest_probability_sequence(merged_df.copy())
-    plot_probabilities(merged_df, {'seq':result, 'start_pos':0})
+    print('Infer the sequence having 0.75 probability:')
+    result = highest_probability_sequence(final_composition_high_df.copy())
+    plot_probabilities(final_composition_high_df, {'seq':result, 'start_pos':0}, '0.75')
+    print_result(result, INIT_REFERENCE)
+
+
+def print_result(result, ref):
     if PRIMER_TYPE == 'right':
-        print(f'''Found candidate with reference {INIT_REFERENCE['seq']} at position {INIT_REFERENCE['start_pos']}:
+        print(f'''Found candidate with reference {ref['seq']} at position {ref['start_pos']}:
                 {result[:APTAMER_LENGTH]}---
                 {result[APTAMER_LENGTH:APTAMER_LENGTH+PRIMER_LENGTH]}''')
     elif PRIMER_TYPE == 'left':
-        print(f'''Found candidate with reference {INIT_REFERENCE['seq']} at position {INIT_REFERENCE['start_pos']}:
+        print(f'''Found candidate with reference {ref['seq']} at position {ref['start_pos']}:
                 {result[:PRIMER_LENGTH]}---
                 {result[PRIMER_LENGTH:PRIMER_LENGTH+APTAMER_LENGTH]}''')
-
 
 def merge_sequencies():
     """
@@ -396,7 +409,7 @@ def highest_probability_sequence(df):
     return ''.join(df[column].idxmax() for column in df.columns)
 
 
-def plot_probabilities(df, reference):
+def plot_probabilities(df, reference, title=None):
     # Set the colors for each letter
     colors = {'A': 'red', 'C': 'green', 'G': 'blue', 'T': 'orange'}
 
@@ -420,7 +433,8 @@ def plot_probabilities(df, reference):
 
     ref_seq = reference['seq']
     ref_pos = reference['start_pos']
-    plt.savefig(f'{PLOTS_DIR}/{ref_pos}:{ref_seq}.png')
+    figname = f'{PLOTS_DIR}/{ref_pos}:{ref_seq}.png' if title is None else f'{PLOTS_DIR}/{ref_seq}-{title}.png'
+    plt.savefig(figname)
     plt.clf()
     plt.cla()
     plt.close()
