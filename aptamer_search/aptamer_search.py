@@ -8,6 +8,7 @@ import re
 import argparse
 import os
 from collections import Counter
+from fuzzywuzzy import fuzz
 
 # ref = 'GGCTTCTGG'
 # pos = 51
@@ -81,13 +82,13 @@ def main():
     print(f'''Choosing the sequences that include the initial reference {INIT_REFERENCE['seq']} 
             at {INIT_REFERENCE['start_pos']} position...''')
 
-    INIT_REFERENCE['sequencies'] = select_ref_sequencies(seq_list, INIT_REFERENCE)
+    INIT_REFERENCE['sequencies'] = select_ref_sequencies(seq_list, INIT_REFERENCE, True)
 
     print(f'''{len(INIT_REFERENCE['sequencies'])} have been selected with 
                 {INIT_REFERENCE['seq']} at {INIT_REFERENCE['start_pos']}''')
 
     print(f'''Calculating probabilities of the occurence of letters at each position...''')
-    freq = calculate_probabilities(INIT_REFERENCE, True)
+    freq = calculate_probabilities(INIT_REFERENCE)
 
     if SAVE:
         fname = f'''steps_{INIT_REFERENCE['seq']}'''
@@ -220,7 +221,7 @@ def auto_reference(seq_list, offset = 1):
     return ref, max_count_pos[0]
 
 
-def select_ref_sequencies(seq_list, reference):
+def select_ref_sequencies(seq_list, reference, fuzzy=False):
     """
     Choose the sequences that include the specified reference sequence
     at the given position from all available sequences.
@@ -239,16 +240,29 @@ def select_ref_sequencies(seq_list, reference):
     left = reference['start_pos'] if PRIMER_TYPE == 'left' else reference['start_pos'] - PRIMER_LENGTH
     right = TOTAL_LENGTH - PRIMER_LENGTH - reference['start_pos'] - len(seq) \
             if PRIMER_TYPE == 'left' else TOTAL_LENGTH - reference['start_pos'] - len(seq)
-    print(f'Positions: {left}-{seq}-{right}')
-    # right = TOTAL_LENGTH - reference['start_pos'] - len(seq)
-    # left = reference['start_pos']
-    pattern = rf'.{{{left}}}{re.escape(seq)}.{{{right}}}'
 
-    for seq in seq_list:
-        matches = re.findall(pattern, seq)
-        for match in matches:
-            if not detect_glued_primers(match):
-                result.append(match)
+    if not fuzzy:
+        pattern = rf'.{{{left}}}{re.escape(seq)}.{{{right}}}'
+        print(f'Positions: {left}-{seq}-{right}')
+        for seq in seq_list:
+            matches = re.findall(pattern, seq)
+            for match in matches:
+                if not detect_glued_primers(match):
+                    result.append(match)
+    else:
+        for s in seq_list:
+            fuzzy_matches = []
+            for i in range(len(s) - REFERENCE_LENGTH + 1):
+                if fuzz.ratio(s[i:i + REFERENCE_LENGTH], seq) >= 95:
+                    fuzzy_matches.append(s[i:i + REFERENCE_LENGTH])
+            fuzzy_matches = list(set(fuzzy_matches))
+            if len(fuzzy_matches) > 0:
+                for f in fuzzy_matches:
+                    pattern = rf'.{{{left}}}{re.escape(f)}.{{{right}}}'
+                    matches = re.findall(pattern, s)
+                    for match in matches:
+                        if not detect_glued_primers(match):
+                            result.append(match)
 
     return np.array([list(s) for s in result]) if len(result) > 0 else None
 
@@ -327,7 +341,7 @@ def update_reference(df, seq_list, reference, direction = -1):
         new_ref = {'seq': k + reference['seq'][:-1] if direction == -1 else reference['seq'][1:] + k,
                    'start_pos': new_start}
         try:
-            sequencies = select_ref_sequencies(seq_list, new_ref)
+            sequencies = select_ref_sequencies(seq_list, new_ref, True)
             new_ref['n_seqs'], new_ref['sequencies'] = len(sequencies), sequencies
             refs.append(new_ref)
             new_ref = max(refs, key=lambda x: x['n_seqs'])
