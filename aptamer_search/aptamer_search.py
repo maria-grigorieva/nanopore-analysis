@@ -61,26 +61,14 @@ def main():
     seq_list = merge_sequencies()
 
     INIT_REFERENCE = {'seq': args.ref, 'start_pos': args.pos}
+    INIT_REFERENCE['sequencies'] = select_ref_sequencies(seq_list, INIT_REFERENCE)
 
-    print(f'Number of sequences in {DATA_DIR}: {len(seq_list)}')
-
-    # Print out the values of all the arguments
-    print(f"Length of an aptamer: {APTAMER_LENGTH}")
-    print(f"Length of a primer: {PRIMER_LENGTH}")
-    print(f"Left Primer: {PL}")
-    print(f"Right Primer: {PR}")
-    print(f"Directory with input data: {DATA_DIR}")
-    print(f"Directory for the output: {OUTPUT_DIR}")
-    print(f"Initial reference length: {REFERENCE_LENGTH}")
-    print(f"Initial reference sequence: {INIT_REFERENCE['seq']}")
-    print(f"Start position of the initial reference sequence: {INIT_REFERENCE['start_pos']}")
+    print_info(seq_list, INIT_REFERENCE)
 
     probabilities = []
 
     print(f'''Choosing the sequences that include the initial reference {INIT_REFERENCE['seq']} 
             at {INIT_REFERENCE['start_pos']} position...''')
-
-    INIT_REFERENCE['sequencies'] = select_ref_sequencies(seq_list, INIT_REFERENCE)
 
     print(f'''{len(INIT_REFERENCE['sequencies'])} have been selected with 
                 {INIT_REFERENCE['seq']} at {INIT_REFERENCE['start_pos']}''')
@@ -92,7 +80,6 @@ def main():
     steps_writer = pd.ExcelWriter(f'{OUTPUT_DIR}/{fname}.xlsx')
     write_steps_excel(freq, INIT_REFERENCE, steps_writer)
 
-    print('Save plots with frequencies')
     plot_probabilities(freq, INIT_REFERENCE)
 
     reference = INIT_REFERENCE
@@ -106,7 +93,6 @@ def main():
     merged_data = {}
 
     print('Merging data from all letters probabilities cases...')
-    # Merge the probabilities of occurrences for each letter
     for df in probabilities:
         for row in ['A', 'C', 'G', 'T']:
             merged_data[row] = df.loc[row] if row not in merged_data else \
@@ -145,11 +131,23 @@ def main():
     infer_sequence('median', final_composition_median_df, INIT_REFERENCE)
     infer_sequence('0.75', final_composition_high_df, INIT_REFERENCE)
 
+def print_info(seq_list, init_ref):
+    print(f'Number of sequences in {DATA_DIR}: {len(seq_list)}')
+    # Print out the values of all the arguments
+    print(f"Length of an aptamer: {APTAMER_LENGTH}")
+    print(f"Length of a primer: {PRIMER_LENGTH}")
+    print(f"Left Primer: {PL}")
+    print(f"Right Primer: {PR}")
+    print(f"Directory with input data: {DATA_DIR}")
+    print(f"Directory for the output: {OUTPUT_DIR}")
+    print(f"Initial reference length: {REFERENCE_LENGTH}")
+    print(f"Initial reference sequence: {init_ref['seq']}")
+    print(f"Start position of the initial reference sequence: {init_ref['start_pos']}")
+
 def infer_sequence(probability, df, init_ref):
     result = highest_probability_sequence(df.copy())
     plot_probabilities(df, {'seq': result, 'start_pos': 0}, probability)
     print_result(result, init_ref)
-
 
 def print_result(result, ref):
     primer = result[:APTAMER_LENGTH] if PRIMER_TYPE == 'right' else result[:PRIMER_LENGTH]
@@ -159,14 +157,12 @@ def print_result(result, ref):
     print(f"Found candidate with reference {ref['seq']} at position {ref['start_pos']}:")
     print(f"{primer}---{aptamer}")
 
-
 def merge_sequencies():
     """
     Merge sequencies from a specified directory directory
     """
     return [str(rec.seq) for file_path in glob.glob(f'{DATA_DIR}/*.fastq') for rec in
                 SeqIO.parse(file_path, "fastq")]
-
 
 def select_ref_sequencies(seq_list, reference):
     """
@@ -202,7 +198,6 @@ def select_ref_sequencies(seq_list, reference):
     result = [match for match in matches if not detect_glued_primers(match)]
     return np.array([list(s) for s in result]) if len(result) > 0 else None
 
-
 def detect_glued_primers(ref, length=6):
     return RC_PR[-length:] + PR[:length] in ref or RC_PL[:length] + PR[:length] in ref
 
@@ -230,14 +225,12 @@ def calculate_probabilities(reference, weights = False):
 
     return df
 
-
 def add_weights(start_index, end_index):
     weights = [1 / (start_index - 1) * (i + 1) for i in range(start_index - 1)]
     weights += [1] * (end_index - start_index)
     weights += [1 / (PRIMER_LENGTH + APTAMER_LENGTH - end_index) * (i + 1) \
                 for i in range(PRIMER_LENGTH + APTAMER_LENGTH - end_index)]
     return weights
-
 
 def update_reference(df, seq_list, reference, direction = -1):
     """
@@ -320,7 +313,6 @@ def highest_probability_sequence(df):
     Choose sequences that have the greatest likelihood of letters appearing in all positions
     """
     return ''.join(df[column].idxmax() for column in df.columns)
-
 
 def plot_probabilities(df, reference, title=None):
     # Set the colors for each letter
