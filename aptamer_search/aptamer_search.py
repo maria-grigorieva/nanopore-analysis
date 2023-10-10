@@ -7,56 +7,54 @@ import glob
 import re
 import argparse
 import os
-from collections import Counter
 from fuzzywuzzy import fuzz
 import itertools
 
+# Define the argument parser
+parser = argparse.ArgumentParser(description='Search an aptamer among low-quality sequences with known length and primers')
 
-# ref = 'GGCTTCTGG'
-# pos = 51
-
-# Create an ArgumentParser object
-parser = argparse.ArgumentParser(description='Search an aptamer among low-quality sequencies with known length and primers')
+# Define the arguments
+args_info = [
+    ['-al', '--alen', int, 'Length of an aptamer', 31],
+    ['-i', '--input', str, 'Directory with input data', 'input_data'],
+    ['-o', '--output', str, 'Directory with output data', 'output'],
+    ['-pl', '--left_primer', str, 'Left Primer', None],
+    ['-pr', '--right_primer', str, 'Right Primer', None],
+    ['-r', '--ref', str, 'Initial reference sequence', 'auto'],
+    ['-p', '--pos', int, 'Start position of the reference sequence', -1],
+    ['-f', '--fuzzy', bool, 'Add fuzzy search', False],
+    ['-s', '--save', bool, 'Save to excel (True/False)', False]
+]
 
 # Add arguments to the parser
-parser.add_argument('-al', '--alen', type=int, help='Length of an aptamer', default=31)
-parser.add_argument('-i', '--input', type=str, help='Directory with input data', default='input_data')
-parser.add_argument('-o', '--output', type=str, help='Directory with output data', default='output')
-parser.add_argument('-pl', '--left_primer', type=str, help='Left Primer')
-parser.add_argument('-pr', '--right_primer', type=str, help='Right Primer')
-parser.add_argument('-r', '--ref', type=str, help='Initial reference sequence', default='auto')
-parser.add_argument('-p', '--pos', type=int, help='Start position of the reference sequence', default=-1)
-parser.add_argument('-f', '--fuzzy', type=bool, help='Add fuzzy search', default=False)
-parser.add_argument('-s', '--save', type=bool, help='Save to excel (True/False)', default=False)
+for arg_info in args_info:
+    parser.add_argument(arg_info[0], arg_info[1], type=arg_info[2], help=arg_info[3], default=arg_info[4])
 
 # Parse the arguments
 args = parser.parse_args()
 
 # Access the argument values
-APTAMER_LENGTH = args.alen
-PL = args.left_primer
-PR = args.right_primer
+APTAMER_LENGTH, PL, PR = args.alen, args.left_primer, args.right_primer
 PRIMER_LENGTH = len(PL)
 TOTAL_LENGTH = APTAMER_LENGTH + PRIMER_LENGTH * 2
-APTAMER_PRIMER = APTAMER_LENGTH + PRIMER_LENGTH
+
 DATA_DIR = args.input
 OUTPUT_DIR = f'{DATA_DIR}/{args.output}'
 PLOTS_DIR = f'{OUTPUT_DIR}/plots/references'
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(PLOTS_DIR, exist_ok=True)
+
 REFERENCE = args.ref
-REFERENCE_LENGTH = len(args.ref)
+REFERENCE_LENGTH = len(REFERENCE)
 START_POS = args.pos
 PRIMER_TYPE = 'left' if START_POS <= PRIMER_LENGTH - REFERENCE_LENGTH else 'right'
 FUZZY = args.fuzzy
 
 # Set all variations of primers
-R_PL = PL[::-1]
-R_PR = PR[::-1]
-C_PL = str(Seq(PL).complement())
-C_PR = str(Seq(PR).complement())
-RC_PL = C_PL[::-1]
-RC_PR = C_PR[::-1]
+R_PL, R_PR = PL[::-1], PR[::-1]
+C_PL, C_PR = str(Seq(PL).complement()), str(Seq(PR).complement())
+RC_PL, RC_PR = C_PL[::-1], C_PR[::-1]
+
 
 def main():
 
@@ -123,9 +121,8 @@ def main():
     output_writer = pd.ExcelWriter(f'{OUTPUT_DIR}/{fname}.xlsx')
 
     print(f'Calculating statistics...')
-    final_composition_median = {}
-    final_composition_low = {}
-    final_composition_high = {}
+    final_composition_median, final_composition_low, final_composition_high = {}, {}, {}
+
     for row in ['A', 'C', 'G', 'T']:
         # Transpose the merged data for the row
         transposed_data = merged_data[row].transpose()
@@ -196,7 +193,6 @@ def select_ref_sequencies(seq_list, reference):
      ['C' 'C' 'G' ... 'T' 'G' 'C']
      ...
     """
-    result = []
     seq = reference['seq']
     left = reference['start_pos'] if PRIMER_TYPE == 'left' else reference['start_pos'] - PRIMER_LENGTH
     right = TOTAL_LENGTH - PRIMER_LENGTH - reference['start_pos'] - len(seq) \
@@ -249,13 +245,10 @@ def calculate_probabilities(reference, weights = False):
 
 
 def add_weights(start_index, end_index):
-    left_step, right_step = 1 / (start_index - 1), 1 / (PRIMER_LENGTH + APTAMER_LENGTH - end_index)
-    right = [1] * (PRIMER_LENGTH + APTAMER_LENGTH - end_index)
-    ref = [1] * (end_index - start_index)
-    left = [1] * (start_index - 1)
-    right = [right_step * (i + 1) for i in range(len(right))]
-    left = [left_step * (i + 1) for i in range(len(left))]
-    weights = [*left, *ref, *reversed(right)]
+    weights = [1 / (start_index - 1) * (i + 1) for i in range(start_index - 1)]
+    weights += [1] * (end_index - start_index)
+    weights += [1 / (PRIMER_LENGTH + APTAMER_LENGTH - end_index) * (i + 1) \
+                for i in range(PRIMER_LENGTH + APTAMER_LENGTH - end_index)]
     return weights
 
 
