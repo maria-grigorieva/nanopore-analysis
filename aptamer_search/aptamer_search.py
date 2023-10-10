@@ -45,7 +45,6 @@ REFERENCE = args.ref
 REFERENCE_LENGTH = len(args.ref)
 START_POS = args.pos
 PRIMER_TYPE = 'left' if START_POS <= PRIMER_LENGTH - REFERENCE_LENGTH else 'right'
-SAVE = args.save
 
 # Set all variations of primers
 R_PL = PL[::-1]
@@ -87,10 +86,9 @@ def main():
     print(f'''Calculating probabilities of the occurence of letters at each position...''')
     freq = calculate_probabilities(INIT_REFERENCE, False)
 
-    if SAVE:
-        fname = f'''steps_{INIT_REFERENCE['seq']}'''
-        steps_writer = pd.ExcelWriter(f'{OUTPUT_DIR}/{fname}.xlsx')
-        write_steps_excel(freq, INIT_REFERENCE, steps_writer)
+    fname = f'''steps_{INIT_REFERENCE['seq']}'''
+    steps_writer = pd.ExcelWriter(f'{OUTPUT_DIR}/{fname}.xlsx')
+    write_steps_excel(freq, INIT_REFERENCE, steps_writer)
 
     print('Save plots with frequencies')
     plot_probabilities(freq, INIT_REFERENCE)
@@ -108,8 +106,7 @@ def main():
                         probabilities,
                         steps_writer if SAVE else None)
 
-    if SAVE:
-        steps_writer.close()
+    steps_writer.close()
 
     # Create an empty dictionary to store the merged data
     merged_data = {}
@@ -334,8 +331,6 @@ def update_reference(df, seq_list, reference, direction = -1):
         except Exception as e:
             continue
 
-
-
 def write_steps_excel(freq, reference, writer=None):
     freq.to_excel(writer,
                   sheet_name=reference['seq'],
@@ -364,8 +359,7 @@ def move_slicing_window(seq_list,
         try:
             reference = update_reference(freq, seq_list, reference, direction=-1)
             freq = calculate_probabilities(reference, False)
-            if SAVE:
-                write_steps_excel(freq, reference, writer)
+            write_steps_excel(freq, reference, writer)
             candidates.append(highest_probability_sequence(freq))
             if reference['n_seqs'] >= 10:
                 probabilities.append(freq)
@@ -385,8 +379,7 @@ def move_slicing_window(seq_list,
         try:
             reference = update_reference(freq, seq_list, reference, direction=1)
             freq = calculate_probabilities(reference, False)
-            if SAVE:
-                write_steps_excel(freq, reference, writer)
+            write_steps_excel(freq, reference, writer)
             candidates.append(highest_probability_sequence(freq))
             if reference['n_seqs'] >= 10:
                 probabilities.append(freq)
