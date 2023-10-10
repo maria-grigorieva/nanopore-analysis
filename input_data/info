@@ -17,7 +17,13 @@ Primers Concatenation
 [C/PR --- PR] GAAGCC --- GGCTTC (83)
 [C/PL --- PL] GAGGAG --- CTCCTC (11)
 
+Parts of primers:
+GAAGCC (214)
+GGCTTC (227)
 
 Search example:
-grep -o 'ATCCCTTTGTGCTATCTTAGGCTTGTCGTGG' *.fastq | wc -l
+grep -o 'TGGTGCGGCTTC' *.fastq | wc -l
+
+Example of running configuration:
+-i ../input_data -pr GGCTTCTGGACTACCTATGC -pl CTCCTCTGACTGTAACCACG -r GGCTTCTGG -p 51 -s True
 
