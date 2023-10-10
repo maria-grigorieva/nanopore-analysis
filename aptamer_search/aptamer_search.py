@@ -104,7 +104,7 @@ def main():
                         freq,
                         candidates,
                         probabilities,
-                        steps_writer if SAVE else None)
+                        steps_writer)
 
     steps_writer.close()
 
@@ -240,7 +240,10 @@ def select_ref_sequencies(seq_list, reference, fuzzy=False):
 
 
 def detect_glued_primers(ref, length=6):
-    return True if RC_PR[-length:] + PR[:length] in ref else False
+    if RC_PR[-length:] + PR[:length] in ref or RC_PL[:length] + PR[:length] in ref:
+        return True
+    else:
+        return False
 
 def has_primer(seq, fuzzy=False):
     if not fuzzy:
