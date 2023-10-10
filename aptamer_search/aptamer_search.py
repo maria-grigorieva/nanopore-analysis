@@ -41,6 +41,7 @@ OUTPUT_DIR = f'{DATA_DIR}/{args.output}'
 PLOTS_DIR = f'{OUTPUT_DIR}/plots/references'
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(PLOTS_DIR, exist_ok=True)
+REFERENCE = args.ref
 REFERENCE_LENGTH = len(args.ref)
 START_POS = args.pos
 PRIMER_TYPE = 'left' if START_POS <= PRIMER_LENGTH - REFERENCE_LENGTH else 'right'
@@ -58,11 +59,7 @@ def main():
 
     seq_list = merge_sequencies()
 
-    if args.ref == 'auto' and args.pos == -1:
-        ref, pos = auto_reference(seq_list, offset = 1)
-        INIT_REFERENCE = {'seq': ref, 'start_pos': pos}
-    else:
-        INIT_REFERENCE = {'seq': args.ref, 'start_pos': args.pos}
+    INIT_REFERENCE = {'seq': args.ref, 'start_pos': args.pos}
 
     print(f'Number of sequences in {DATA_DIR}: {len(seq_list)}')
 
@@ -82,13 +79,13 @@ def main():
     print(f'''Choosing the sequences that include the initial reference {INIT_REFERENCE['seq']} 
             at {INIT_REFERENCE['start_pos']} position...''')
 
-    INIT_REFERENCE['sequencies'] = select_ref_sequencies(seq_list, INIT_REFERENCE, True)
+    INIT_REFERENCE['sequencies'] = select_ref_sequencies(seq_list, INIT_REFERENCE, False)
 
     print(f'''{len(INIT_REFERENCE['sequencies'])} have been selected with 
                 {INIT_REFERENCE['seq']} at {INIT_REFERENCE['start_pos']}''')
 
     print(f'''Calculating probabilities of the occurence of letters at each position...''')
-    freq = calculate_probabilities(INIT_REFERENCE)
+    freq = calculate_probabilities(INIT_REFERENCE, False)
 
     if SAVE:
         fname = f'''steps_{INIT_REFERENCE['seq']}'''
@@ -201,26 +198,6 @@ def merge_sequencies():
                 SeqIO.parse(file_path, "fastq")]
 
 
-def auto_reference(seq_list, offset = 1):
-    kmer_frequencies = Counter(
-        sequence[i:i + REFERENCE_LENGTH] for sequence in seq_list
-        for i in range(0, len(sequence) - REFERENCE_LENGTH + 1, offset))
-    df = pd.DataFrame(kmer_frequencies.items(),
-                        columns=['kmer', 'frequency']). \
-        sort_values('frequency', ascending=False)
-    ref = df['kmer'].values[0]
-
-    kmers = list(set(seq[i:i + TOTAL_LENGTH] for seq in seq_list
-                     for i in range(0, len(seq) - TOTAL_LENGTH + 1, offset)))
-    result = [{'seq': s, 'pos': s.find(ref)} for s in kmers if s.find(ref) != -1]
-    pos_counts = Counter(item['pos'] for item in result)
-
-    max_count = max(pos_counts.values())  # Get the maximum count
-    max_count_pos = [pos for pos, count in pos_counts.items() if count == max_count]
-    print(f'The automatically selected reference with length {REFERENCE_LENGTH} is {ref} at position {max_count_pos[0]}')
-    return ref, max_count_pos[0]
-
-
 def select_ref_sequencies(seq_list, reference, fuzzy=False):
     """
     Choose the sequences that include the specified reference sequence
@@ -236,7 +213,7 @@ def select_ref_sequencies(seq_list, reference, fuzzy=False):
     """
     result = []
     seq = reference['seq']
-
+    matches = []
     left = reference['start_pos'] if PRIMER_TYPE == 'left' else reference['start_pos'] - PRIMER_LENGTH
     right = TOTAL_LENGTH - PRIMER_LENGTH - reference['start_pos'] - len(seq) \
             if PRIMER_TYPE == 'left' else TOTAL_LENGTH - reference['start_pos'] - len(seq)
@@ -245,30 +222,36 @@ def select_ref_sequencies(seq_list, reference, fuzzy=False):
         pattern = rf'.{{{left}}}{re.escape(seq)}.{{{right}}}'
         print(f'Positions: {left}-{seq}-{right}')
         for seq in seq_list:
-            matches = re.findall(pattern, seq)
-            for match in matches:
-                if not detect_glued_primers(match):
-                    result.append(match)
+            matches.extend(re.findall(pattern, seq))
     else:
         for s in seq_list:
             fuzzy_matches = []
             for i in range(len(s) - REFERENCE_LENGTH + 1):
-                if fuzz.ratio(s[i:i + REFERENCE_LENGTH], seq) >= 95:
+                if fuzz.ratio(s[i:i + REFERENCE_LENGTH], seq) >= 90:
                     fuzzy_matches.append(s[i:i + REFERENCE_LENGTH])
             fuzzy_matches = list(set(fuzzy_matches))
             if len(fuzzy_matches) > 0:
                 for f in fuzzy_matches:
                     pattern = rf'.{{{left}}}{re.escape(f)}.{{{right}}}'
-                    matches = re.findall(pattern, s)
-                    for match in matches:
-                        if not detect_glued_primers(match):
-                            result.append(match)
+                    matches.extend(re.findall(pattern, s))
 
+    if len(matches) > 0:
+        for match in matches:
+            if not detect_glued_primers(match) and has_primer(match, False):
+                result.append(match)
     return np.array([list(s) for s in result]) if len(result) > 0 else None
 
 
 def detect_glued_primers(ref, length=6):
-    return True if C_PR[-length:] + PR[:length] in ref else False
+    return True if RC_PR[-length:] + PR[:length] in ref else False
+
+def has_primer(seq, fuzzy=False):
+    if not fuzzy:
+        return True if seq[START_POS-PRIMER_LENGTH:START_POS-PRIMER_LENGTH+REFERENCE_LENGTH] == REFERENCE else False
+    else:
+        return True \
+            if fuzz.ratio(seq[START_POS-PRIMER_LENGTH:START_POS-PRIMER_LENGTH+REFERENCE_LENGTH], REFERENCE) >= 90 \
+        else False
 
 def calculate_probabilities(reference, weights = False):
     """
@@ -298,9 +281,9 @@ def calculate_probabilities(reference, weights = False):
 
 def add_weights(start_index, end_index):
     left_step, right_step = 1 / (start_index - 1), 1 / (PRIMER_LENGTH + APTAMER_LENGTH - end_index)
-    right = [0] * (PRIMER_LENGTH + APTAMER_LENGTH - end_index)
+    right = [1] * (PRIMER_LENGTH + APTAMER_LENGTH - end_index)
     ref = [1] * (end_index - start_index)
-    left = [0] * (start_index - 1)
+    left = [1] * (start_index - 1)
     right = [right_step * (i + 1) for i in range(len(right))]
     left = [left_step * (i + 1) for i in range(len(left))]
     weights = [*left, *ref, *reversed(right)]
@@ -341,7 +324,7 @@ def update_reference(df, seq_list, reference, direction = -1):
         new_ref = {'seq': k + reference['seq'][:-1] if direction == -1 else reference['seq'][1:] + k,
                    'start_pos': new_start}
         try:
-            sequencies = select_ref_sequencies(seq_list, new_ref, True)
+            sequencies = select_ref_sequencies(seq_list, new_ref, False)
             new_ref['n_seqs'], new_ref['sequencies'] = len(sequencies), sequencies
             refs.append(new_ref)
             new_ref = max(refs, key=lambda x: x['n_seqs'])
@@ -354,7 +337,6 @@ def update_reference(df, seq_list, reference, direction = -1):
 
 
 def write_steps_excel(freq, reference, writer=None):
-
     freq.to_excel(writer,
                   sheet_name=reference['seq'],
                   index=True,
@@ -381,7 +363,7 @@ def move_slicing_window(seq_list,
     while reference['start_pos'] > left_limit:
         try:
             reference = update_reference(freq, seq_list, reference, direction=-1)
-            freq = calculate_probabilities(reference)
+            freq = calculate_probabilities(reference, False)
             if SAVE:
                 write_steps_excel(freq, reference, writer)
             candidates.append(highest_probability_sequence(freq))
@@ -394,7 +376,7 @@ def move_slicing_window(seq_list,
 
     # Reset the reference value to its initial state
     reference = init_ref
-    freq = calculate_probabilities(reference)
+    freq = calculate_probabilities(reference, False)
     print('The reference sequence has been reset to the initial value')
 
     print('Moving right...')
@@ -402,7 +384,7 @@ def move_slicing_window(seq_list,
     while reference['start_pos'] < right_limit:
         try:
             reference = update_reference(freq, seq_list, reference, direction=1)
-            freq = calculate_probabilities(reference)
+            freq = calculate_probabilities(reference, False)
             if SAVE:
                 write_steps_excel(freq, reference, writer)
             candidates.append(highest_probability_sequence(freq))
