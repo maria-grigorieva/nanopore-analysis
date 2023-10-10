@@ -9,6 +9,8 @@ import argparse
 import os
 from collections import Counter
 from fuzzywuzzy import fuzz
+import itertools
+
 
 # ref = 'GGCTTCTGG'
 # pos = 51
@@ -24,6 +26,7 @@ parser.add_argument('-pl', '--left_primer', type=str, help='Left Primer')
 parser.add_argument('-pr', '--right_primer', type=str, help='Right Primer')
 parser.add_argument('-r', '--ref', type=str, help='Initial reference sequence', default='auto')
 parser.add_argument('-p', '--pos', type=int, help='Start position of the reference sequence', default=-1)
+parser.add_argument('-f', '--fuzzy', type=bool, help='Add fuzzy search', default=False)
 parser.add_argument('-s', '--save', type=bool, help='Save to excel (True/False)', default=False)
 
 # Parse the arguments
@@ -45,6 +48,7 @@ REFERENCE = args.ref
 REFERENCE_LENGTH = len(args.ref)
 START_POS = args.pos
 PRIMER_TYPE = 'left' if START_POS <= PRIMER_LENGTH - REFERENCE_LENGTH else 'right'
+FUZZY = args.fuzzy
 
 # Set all variations of primers
 R_PL = PL[::-1]
@@ -73,12 +77,12 @@ def main():
     print(f"Initial reference sequence: {INIT_REFERENCE['seq']}")
     print(f"Start position of the initial reference sequence: {INIT_REFERENCE['start_pos']}")
 
-    candidates, probabilities = [], []
+    probabilities = []
 
     print(f'''Choosing the sequences that include the initial reference {INIT_REFERENCE['seq']} 
             at {INIT_REFERENCE['start_pos']} position...''')
 
-    INIT_REFERENCE['sequencies'] = select_ref_sequencies(seq_list, INIT_REFERENCE, False)
+    INIT_REFERENCE['sequencies'] = select_ref_sequencies(seq_list, INIT_REFERENCE)
 
     print(f'''{len(INIT_REFERENCE['sequencies'])} have been selected with 
                 {INIT_REFERENCE['seq']} at {INIT_REFERENCE['start_pos']}''')
@@ -95,14 +99,11 @@ def main():
 
     reference = INIT_REFERENCE
 
-    candidates.append(highest_probability_sequence(freq))
-
     print('Moving slicing window...')
     move_slicing_window(seq_list,
                         reference,
                         INIT_REFERENCE,
                         freq,
-                        candidates,
                         probabilities,
                         steps_writer)
 
@@ -146,45 +147,32 @@ def main():
     final_composition_median_df = pd.DataFrame(final_composition_median).T
     final_composition_high_df = pd.DataFrame(final_composition_high).T
 
-    final_composition_low_df.to_excel(output_writer,
-                            sheet_name="final-composition-low",
-                            index=True,
-                            header=True)
-    final_composition_median_df.to_excel(output_writer,
-                            sheet_name="final-composition-median",
-                            index=True,
-                            header=True)
-    final_composition_high_df.to_excel(output_writer,
-                            sheet_name="final-composition-high",
-                            index=True,
-                            header=True)
+    dfs = [final_composition_low_df, final_composition_median_df, final_composition_high_df]
+    sheet_names = ["final-composition-low", "final-composition-median", "final-composition-high"]
+
+    for df, sheet_name in zip(dfs, sheet_names):
+        df.to_excel(output_writer, sheet_name=sheet_name, index=True, header=True)
+
     output_writer.close()
 
-    print('Infer the sequence having 0.25 probability:')
-    result = highest_probability_sequence(final_composition_low_df.copy())
-    plot_probabilities(final_composition_low_df, {'seq':result, 'start_pos':0}, '0.25')
-    print_result(result, INIT_REFERENCE)
+    infer_sequence('0.25', final_composition_low_df, INIT_REFERENCE)
+    infer_sequence('median', final_composition_median_df, INIT_REFERENCE)
+    infer_sequence('0.75', final_composition_high_df, INIT_REFERENCE)
 
-    print('Infer the sequence having median probability:')
-    result = highest_probability_sequence(final_composition_median_df.copy())
-    plot_probabilities(final_composition_median_df, {'seq':result, 'start_pos':0}, 'median')
-    print_result(result, INIT_REFERENCE)
-
-    print('Infer the sequence having 0.75 probability:')
-    result = highest_probability_sequence(final_composition_high_df.copy())
-    plot_probabilities(final_composition_high_df, {'seq':result, 'start_pos':0}, '0.75')
-    print_result(result, INIT_REFERENCE)
+def infer_sequence(probability, df, init_ref):
+    result = highest_probability_sequence(df.copy())
+    plot_probabilities(df, {'seq': result, 'start_pos': 0}, probability)
+    print_result(result, init_ref)
 
 
 def print_result(result, ref):
-    if PRIMER_TYPE == 'right':
-        print(f'''Found candidate with reference {ref['seq']} at position {ref['start_pos']}:
-                {result[:APTAMER_LENGTH]}---
-                {result[APTAMER_LENGTH:APTAMER_LENGTH+PRIMER_LENGTH]}''')
-    elif PRIMER_TYPE == 'left':
-        print(f'''Found candidate with reference {ref['seq']} at position {ref['start_pos']}:
-                {result[:PRIMER_LENGTH]}---
-                {result[PRIMER_LENGTH:PRIMER_LENGTH+APTAMER_LENGTH]}''')
+    primer = result[:APTAMER_LENGTH] if PRIMER_TYPE == 'right' else result[:PRIMER_LENGTH]
+    aptamer = result[APTAMER_LENGTH:APTAMER_LENGTH + PRIMER_LENGTH] \
+        if PRIMER_TYPE == 'right' else result[PRIMER_LENGTH:PRIMER_LENGTH + APTAMER_LENGTH]
+
+    print(f"Found candidate with reference {ref['seq']} at position {ref['start_pos']}:")
+    print(f"{primer}---{aptamer}")
+
 
 def merge_sequencies():
     """
@@ -195,7 +183,7 @@ def merge_sequencies():
                 SeqIO.parse(file_path, "fastq")]
 
 
-def select_ref_sequencies(seq_list, reference, fuzzy=False):
+def select_ref_sequencies(seq_list, reference):
     """
     Choose the sequences that include the specified reference sequence
     at the given position from all available sequences.
@@ -210,48 +198,29 @@ def select_ref_sequencies(seq_list, reference, fuzzy=False):
     """
     result = []
     seq = reference['seq']
-    matches = []
     left = reference['start_pos'] if PRIMER_TYPE == 'left' else reference['start_pos'] - PRIMER_LENGTH
     right = TOTAL_LENGTH - PRIMER_LENGTH - reference['start_pos'] - len(seq) \
             if PRIMER_TYPE == 'left' else TOTAL_LENGTH - reference['start_pos'] - len(seq)
 
-    if not fuzzy:
+    if not FUZZY:
         pattern = rf'.{{{left}}}{re.escape(seq)}.{{{right}}}'
         print(f'Positions: {left}-{seq}-{right}')
-        for seq in seq_list:
-            matches.extend(re.findall(pattern, seq))
+        matches = [match for seq in seq_list for match in re.findall(pattern, seq)]
     else:
+        matches = []
         for s in seq_list:
-            fuzzy_matches = []
-            for i in range(len(s) - REFERENCE_LENGTH + 1):
-                if fuzz.ratio(s[i:i + REFERENCE_LENGTH], seq) >= 90:
-                    fuzzy_matches.append(s[i:i + REFERENCE_LENGTH])
-            fuzzy_matches = list(set(fuzzy_matches))
-            if len(fuzzy_matches) > 0:
-                for f in fuzzy_matches:
-                    pattern = rf'.{{{left}}}{re.escape(f)}.{{{right}}}'
-                    matches.extend(re.findall(pattern, s))
+            fuzzy_matches = list(set([s[i:i + REFERENCE_LENGTH] for i in range(len(s) - REFERENCE_LENGTH + 1) if
+                             fuzz.ratio(s[i:i + REFERENCE_LENGTH], seq) >= 90]))
+            matches.extend(re.findall(rf'.{{{left}}}{re.escape(f)}.{{{right}}}', s) for f in fuzzy_matches if
+                           len(fuzzy_matches) > 0)
+        matches = list(itertools.chain.from_iterable(matches))
 
-    if len(matches) > 0:
-        for match in matches:
-            if not detect_glued_primers(match) and has_primer(match, False):
-                result.append(match)
+    result = [match for match in matches if not detect_glued_primers(match)]
     return np.array([list(s) for s in result]) if len(result) > 0 else None
 
 
 def detect_glued_primers(ref, length=6):
-    if RC_PR[-length:] + PR[:length] in ref or RC_PL[:length] + PR[:length] in ref:
-        return True
-    else:
-        return False
-
-def has_primer(seq, fuzzy=False):
-    if not fuzzy:
-        return True if seq[START_POS-PRIMER_LENGTH:START_POS-PRIMER_LENGTH+REFERENCE_LENGTH] == REFERENCE else False
-    else:
-        return True \
-            if fuzz.ratio(seq[START_POS-PRIMER_LENGTH:START_POS-PRIMER_LENGTH+REFERENCE_LENGTH], REFERENCE) >= 90 \
-        else False
+    return RC_PR[-length:] + PR[:length] in ref or RC_PL[:length] + PR[:length] in ref
 
 def calculate_probabilities(reference, weights = False):
     """
@@ -324,7 +293,7 @@ def update_reference(df, seq_list, reference, direction = -1):
         new_ref = {'seq': k + reference['seq'][:-1] if direction == -1 else reference['seq'][1:] + k,
                    'start_pos': new_start}
         try:
-            sequencies = select_ref_sequencies(seq_list, new_ref, False)
+            sequencies = select_ref_sequencies(seq_list, new_ref)
             new_ref['n_seqs'], new_ref['sequencies'] = len(sequencies), sequencies
             refs.append(new_ref)
             new_ref = max(refs, key=lambda x: x['n_seqs'])
@@ -346,51 +315,36 @@ def write_steps_excel(freq, reference, writer=None):
                                                    header=True)
 
 
-def move_slicing_window(seq_list,
-                        reference,
-                        init_ref,
-                        freq,
-                        candidates,
-                        probabilities,
-                        writer):
-    # move left
-    print('Moving left...')
+
+def move_slicing_window(seq_list, reference, init_ref, freq, probabilities, writer):
     left_limit = PRIMER_LENGTH if PRIMER_TYPE == 'right' else 0
-    right_limit = TOTAL_LENGTH - REFERENCE_LENGTH - 1 if PRIMER_TYPE == 'right' \
-        else TOTAL_LENGTH - PRIMER_LENGTH - REFERENCE_LENGTH - 1
-    while reference['start_pos'] > left_limit:
+    right_limit = TOTAL_LENGTH - REFERENCE_LENGTH - 1 if PRIMER_TYPE == 'right' else TOTAL_LENGTH - PRIMER_LENGTH - REFERENCE_LENGTH - 1
+
+    def update_window(direction):
+        nonlocal reference, freq
+        reference = update_reference(freq, seq_list, reference, direction=direction)
+        freq = calculate_probabilities(reference)
+        write_steps_excel(freq, reference, writer)
+        probabilities.append(freq)
+        plot_probabilities(freq, reference)
+
+    print('Moving left...')
+    while reference['start_pos'] > START_POS - REFERENCE_LENGTH + 3:
         try:
-            reference = update_reference(freq, seq_list, reference, direction=-1)
-            freq = calculate_probabilities(reference, False)
-            write_steps_excel(freq, reference, writer)
-            candidates.append(highest_probability_sequence(freq))
-            if reference['n_seqs'] >= 10:
-                probabilities.append(freq)
-            print('Save plots with frequencies')
-            plot_probabilities(freq, reference)
+            update_window(direction=-1)
         except Exception as e:
             continue
 
-    # Reset the reference value to its initial state
     reference = init_ref
     freq = calculate_probabilities(reference, False)
     print('The reference sequence has been reset to the initial value')
 
     print('Moving right...')
-    # move right
     while reference['start_pos'] < right_limit:
         try:
-            reference = update_reference(freq, seq_list, reference, direction=1)
-            freq = calculate_probabilities(reference, False)
-            write_steps_excel(freq, reference, writer)
-            candidates.append(highest_probability_sequence(freq))
-            if reference['n_seqs'] >= 10:
-                probabilities.append(freq)
-            print('Save plots with frequencies')
-            plot_probabilities(freq, reference)
+            update_window(direction=1)
         except Exception as e:
             continue
-
 
 def highest_probability_sequence(df):
     """
