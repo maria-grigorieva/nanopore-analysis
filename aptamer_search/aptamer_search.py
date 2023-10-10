@@ -98,12 +98,7 @@ def main():
     reference = INIT_REFERENCE
 
     print('Moving slicing window...')
-    move_slicing_window(seq_list,
-                        reference,
-                        INIT_REFERENCE,
-                        freq,
-                        probabilities,
-                        steps_writer)
+    move_slicing_window(seq_list, reference, INIT_REFERENCE, freq, probabilities, steps_writer)
 
     steps_writer.close()
 
@@ -127,15 +122,9 @@ def main():
         # Transpose the merged data for the row
         transposed_data = merged_data[row].transpose()
         transposed_data.reset_index(drop=True, inplace=True)
-        transposed_data.to_excel(output_writer,
-                                 sheet_name=f"{row}",
-                                 index=True,
-                                 header=True)
+        transposed_data.to_excel(output_writer, sheet_name=f"{row}", index=True, header=True)
         stats = transposed_data.describe()
-        stats.to_excel(output_writer,
-                        sheet_name=f"{row}-stats",
-                        index=True,
-                        header=True)
+        stats.to_excel(output_writer, sheet_name=f"{row}-stats", index=True, header=True)
         final_composition_low[row] = stats.iloc[4].to_numpy()
         final_composition_median[row] = stats.iloc[5].to_numpy()
         final_composition_high[row] = stats.iloc[6].to_numpy()
@@ -174,7 +163,6 @@ def print_result(result, ref):
 def merge_sequencies():
     """
     Merge sequencies from a specified directory directory
-    :return:
     """
     return [str(rec.seq) for file_path in glob.glob(f'{DATA_DIR}/*.fastq') for rec in
                 SeqIO.parse(file_path, "fastq")]
@@ -238,7 +226,6 @@ def calculate_probabilities(reference, weights = False):
         end_index = reference['start_pos'] - PRIMER_LENGTH + REFERENCE_LENGTH if PRIMER_TYPE == 'right' \
                         else reference['start_pos'] + REFERENCE_LENGTH
         weights = add_weights(start_index, end_index)
-        # Multiply numbers in each row with the weights
         df.iloc[:, 1:] = df.iloc[:, 1:].mul(weights, axis=1)
 
     return df
@@ -254,22 +241,19 @@ def add_weights(start_index, end_index):
 
 def update_reference(df, seq_list, reference, direction = -1):
     """
-    Shift the current reference sequence to the left or right
-    and generate a new matrix (numpy array) by extracting
-    sequences from the array of all sequences.
+    Shift the current reference sequence to the left or right and generate a new matrix (numpy array)
+    by extracting sequences from the array of all sequences.
     :param df: output of calculate_probabilities() - DataFrame with probabilities
     :param seq_list: list of all sequencies
     :param reference: reference dictionary
     :param direction: directions = {'left': -1, 'right': 1}
-    :return: dictionary with the following structure:
+    :return: new reference record:
        'seq' : reference sequence,
        'start_pos' : start position of the reference in aptamer,
        'sequencies' : list of extracted sequencies,
        'n_seq' : number of extracted sequencies
     """
     new_start = reference['start_pos'] + direction
-    # Choose the probabilities of letters at position 'new_start'
-    # new_start - PRIMER_LENGTH + REFERENCE_LENGTH - 1
     index = {
         (-1, 'left'): new_start,
         (-1, 'right'): new_start - PRIMER_LENGTH,
@@ -278,9 +262,8 @@ def update_reference(df, seq_list, reference, direction = -1):
     }.get((direction, PRIMER_TYPE), 0)
     letters_probability = df[index].to_dict()
 
-    # And sort them in descending order
     sorted_dict = dict(sorted(letters_probability.items(), key=lambda item: item[1], reverse=True))
-    # Initialize an empty array for storing variations of references with different letters at position 'new_start'
+
     refs = []
     for k, v in sorted_dict.items():
         new_ref = {'seq': k + reference['seq'][:-1] if direction == -1 else reference['seq'][1:] + k,
@@ -307,11 +290,10 @@ def write_steps_excel(freq, reference, writer=None):
                                                    index=True,
                                                    header=True)
 
-
-
 def move_slicing_window(seq_list, reference, init_ref, freq, probabilities, writer):
-    left_limit = PRIMER_LENGTH if PRIMER_TYPE == 'right' else 0
-    right_limit = TOTAL_LENGTH - REFERENCE_LENGTH - 1 if PRIMER_TYPE == 'right' else TOTAL_LENGTH - PRIMER_LENGTH - REFERENCE_LENGTH - 1
+    # left_limit = PRIMER_LENGTH if PRIMER_TYPE == 'right' else 0
+    right_limit = TOTAL_LENGTH - REFERENCE_LENGTH - 1 if PRIMER_TYPE == 'right' \
+        else TOTAL_LENGTH - PRIMER_LENGTH - REFERENCE_LENGTH - 1
 
     def update_window(direction):
         nonlocal reference, freq
@@ -323,10 +305,7 @@ def move_slicing_window(seq_list, reference, init_ref, freq, probabilities, writ
 
     print('Moving left...')
     while reference['start_pos'] > START_POS - REFERENCE_LENGTH + 3:
-        try:
-            update_window(direction=-1)
-        except Exception as e:
-            continue
+        update_window(direction=-1)
 
     reference = init_ref
     freq = calculate_probabilities(reference, False)
@@ -334,16 +313,11 @@ def move_slicing_window(seq_list, reference, init_ref, freq, probabilities, writ
 
     print('Moving right...')
     while reference['start_pos'] < right_limit:
-        try:
-            update_window(direction=1)
-        except Exception as e:
-            continue
+        update_window(direction=1)
 
 def highest_probability_sequence(df):
     """
     Choose sequences that have the greatest likelihood of letters appearing in all positions
-    :param df:
-    :return:
     """
     return ''.join(df[column].idxmax() for column in df.columns)
 
