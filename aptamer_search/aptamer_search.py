@@ -297,7 +297,7 @@ def move_slicing_window(seq_list, reference, init_ref, freq, probabilities, writ
         plot_probabilities(freq, reference)
 
     print('Moving left...')
-    while reference['start_pos'] > START_POS - REFERENCE_LENGTH + 3:
+    while reference['start_pos'] > START_POS - REFERENCE_LENGTH:
         update_window(direction=-1)
 
     reference = init_ref
