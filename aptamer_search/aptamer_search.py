@@ -191,12 +191,15 @@ def select_ref_sequencies(seq_list, reference):
         for s in seq_list:
             fuzzy_matches = list(set([s[i:i + REFERENCE_LENGTH] for i in range(len(s) - REFERENCE_LENGTH + 1) if
                              fuzz.ratio(s[i:i + REFERENCE_LENGTH], seq) >= 90]))
-            matches.extend(re.findall(rf'.{{{left}}}{re.escape(f)}.{{{right}}}', s) for f in fuzzy_matches if
-                           len(fuzzy_matches) > 0)
+            # remove right shifts
+            filtered_sequences = [s for s in fuzzy_matches if s != seq and s != seq[:-1]]
+            matches.extend(re.findall(rf'.{{{left}}}{re.escape(f)}.{{{right}}}', s) for f in filtered_sequences if
+                           len(filtered_sequences) > 0)
         matches = list(itertools.chain.from_iterable(matches))
 
     result = [match for match in matches if not detect_glued_primers(match)]
     return np.array([list(s) for s in result]) if len(result) > 0 else None
+    #return np.array([list(s) for s in matches]) if len(matches) > 0 else None
 
 def detect_glued_primers(ref, length=6):
     return RC_PR[-length:] + PR[:length] in ref or RC_PL[:length] + PR[:length] in ref
@@ -215,22 +218,8 @@ def calculate_probabilities(reference, weights = False):
     matrix = reference['sequencies']
     df = pd.DataFrame({letter: np.sum(matrix == letter, axis=0) / matrix.shape[0]
                          for letter in ['A', 'C', 'G', 'T']}).T
-    if weights:
-        start_index = reference['start_pos'] - PRIMER_LENGTH if PRIMER_TYPE == 'right' \
-                        else reference['start_pos']
-        end_index = reference['start_pos'] - PRIMER_LENGTH + REFERENCE_LENGTH if PRIMER_TYPE == 'right' \
-                        else reference['start_pos'] + REFERENCE_LENGTH
-        weights = add_weights(start_index, end_index)
-        df.iloc[:, 1:] = df.iloc[:, 1:].mul(weights, axis=1)
 
     return df
-
-def add_weights(start_index, end_index):
-    weights = [1 / (start_index - 1) * (i + 1) for i in range(start_index - 1)]
-    weights += [1] * (end_index - start_index)
-    weights += [1 / (PRIMER_LENGTH + APTAMER_LENGTH - end_index) * (i + 1) \
-                for i in range(PRIMER_LENGTH + APTAMER_LENGTH - end_index)]
-    return weights
 
 def update_reference(df, seq_list, reference, direction = -1):
     """
@@ -253,24 +242,26 @@ def update_reference(df, seq_list, reference, direction = -1):
         (1, 'left'): new_start + REFERENCE_LENGTH - 1,
         (1, 'right'): new_start + REFERENCE_LENGTH - PRIMER_LENGTH - 1
     }.get((direction, PRIMER_TYPE), 0)
+
     letters_probability = df[index].to_dict()
 
     sorted_dict = dict(sorted(letters_probability.items(), key=lambda item: item[1], reverse=True))
 
     refs = []
     for k, v in sorted_dict.items():
-        new_ref = {'seq': k + reference['seq'][:-1] if direction == -1 else reference['seq'][1:] + k,
-                   'start_pos': new_start}
         try:
+            new_ref = {'seq': k + reference['seq'][:-1] if direction == -1 else reference['seq'][1:] + k,
+                           'start_pos': new_start}
             sequencies = select_ref_sequencies(seq_list, new_ref)
             new_ref['n_seqs'], new_ref['sequencies'] = len(sequencies), sequencies
             refs.append(new_ref)
-            new_ref = max(refs, key=lambda x: x['n_seqs'])
-            print(
-                f'''{len(new_ref['sequencies'])} have been selected with {new_ref['seq']} at {new_ref['start_pos']}''')
-            return new_ref
         except Exception as e:
             continue
+    res = max(refs, key=lambda x: x['n_seqs'])
+    print(
+        f'''{len(res['sequencies'])} have been selected with {res['seq']} at {res['start_pos']}''')
+    return res
+
 
 def write_steps_excel(freq, reference, writer=None):
     freq.to_excel(writer,
@@ -283,8 +274,9 @@ def write_steps_excel(freq, reference, writer=None):
                                                    index=True,
                                                    header=True)
 
+
 def move_slicing_window(seq_list, reference, init_ref, freq, probabilities, writer):
-    # left_limit = PRIMER_LENGTH if PRIMER_TYPE == 'right' else 0
+    left_limit = PRIMER_LENGTH if PRIMER_TYPE == 'right' else 0
     right_limit = TOTAL_LENGTH - REFERENCE_LENGTH - 1 if PRIMER_TYPE == 'right' \
         else TOTAL_LENGTH - PRIMER_LENGTH - REFERENCE_LENGTH - 1
 
@@ -297,7 +289,7 @@ def move_slicing_window(seq_list, reference, init_ref, freq, probabilities, writ
         plot_probabilities(freq, reference)
 
     print('Moving left...')
-    while reference['start_pos'] > START_POS - REFERENCE_LENGTH:
+    while reference['start_pos'] > left_limit:
         update_window(direction=-1)
 
     reference = init_ref
