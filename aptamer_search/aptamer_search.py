@@ -23,7 +23,8 @@ args_info = [
     ['-r', '--ref', str, 'Initial reference sequence', 'auto'],
     ['-p', '--pos', int, 'Start position of the reference sequence', -1],
     ['-f', '--fuzzy', bool, 'Add fuzzy search', False],
-    ['-s', '--save', bool, 'Save to excel (True/False)', False]
+    ['-s', '--save', bool, 'Save to excel (True/False)', False],
+    ['-c', '--complement', bool, 'Add complementary primer', False]
 ]
 
 # Add arguments to the parser
@@ -49,6 +50,8 @@ REFERENCE_LENGTH = len(REFERENCE)
 START_POS = args.pos
 PRIMER_TYPE = 'left' if START_POS <= PRIMER_LENGTH - REFERENCE_LENGTH else 'right'
 FUZZY = args.fuzzy
+COMPLEMENT = args.complement
+SAVE_FILES = args.save
 
 # Set all variations of primers
 R_PL, R_PR = PL[::-1], PR[::-1]
@@ -60,7 +63,7 @@ def main():
 
     seq_list = merge_sequencies()
 
-    INIT_REFERENCE = {'seq': args.ref, 'start_pos': args.pos}
+    INIT_REFERENCE = {'seq': args.ref, 'complement': str(Seq(args.ref[::-1]).complement()), 'start_pos': args.pos}
     INIT_REFERENCE['sequencies'] = select_ref_sequencies(seq_list, INIT_REFERENCE)
 
     print_info(seq_list, INIT_REFERENCE)
@@ -77,8 +80,12 @@ def main():
     freq = calculate_probabilities(INIT_REFERENCE, False)
 
     fname = f'''steps_{INIT_REFERENCE['seq']}'''
-    steps_writer = pd.ExcelWriter(f'{OUTPUT_DIR}/{fname}.xlsx')
-    write_steps_excel(freq, INIT_REFERENCE, steps_writer)
+
+    if SAVE_FILES:
+        steps_writer = pd.ExcelWriter(f'{OUTPUT_DIR}/{fname}.xlsx')
+        write_steps_excel(freq, INIT_REFERENCE, steps_writer)
+    else:
+        steps_writer = None
 
     plot_probabilities(freq, INIT_REFERENCE)
 
@@ -87,7 +94,8 @@ def main():
     print('Moving slicing window...')
     move_slicing_window(seq_list, reference, INIT_REFERENCE, freq, probabilities, steps_writer)
 
-    steps_writer.close()
+    if SAVE_FILES:
+        steps_writer.close()
 
     # Create an empty dictionary to store the merged data
     merged_data = {}
@@ -99,7 +107,8 @@ def main():
                 pd.concat([merged_data[row], df.loc[row]], axis=1)
 
     fname = f'''output_{INIT_REFERENCE['seq']}'''
-    output_writer = pd.ExcelWriter(f'{OUTPUT_DIR}/{fname}.xlsx')
+    if SAVE_FILES:
+        output_writer = pd.ExcelWriter(f'{OUTPUT_DIR}/{fname}.xlsx')
 
     print(f'Calculating statistics...')
     final_composition_median, final_composition_low, final_composition_high = {}, {}, {}
@@ -108,9 +117,11 @@ def main():
         # Transpose the merged data for the row
         transposed_data = merged_data[row].transpose()
         transposed_data.reset_index(drop=True, inplace=True)
-        transposed_data.to_excel(output_writer, sheet_name=f"{row}", index=True, header=True)
+        if SAVE_FILES:
+            transposed_data.to_excel(output_writer, sheet_name=f"{row}", index=True, header=True)
         stats = transposed_data.describe()
-        stats.to_excel(output_writer, sheet_name=f"{row}-stats", index=True, header=True)
+        if SAVE_FILES:
+            stats.to_excel(output_writer, sheet_name=f"{row}-stats", index=True, header=True)
         final_composition_low[row] = stats.iloc[4].to_numpy()
         final_composition_median[row] = stats.iloc[5].to_numpy()
         final_composition_high[row] = stats.iloc[6].to_numpy()
@@ -122,10 +133,11 @@ def main():
     dfs = [final_composition_low_df, final_composition_median_df, final_composition_high_df]
     sheet_names = ["final-composition-low", "final-composition-median", "final-composition-high"]
 
-    for df, sheet_name in zip(dfs, sheet_names):
-        df.to_excel(output_writer, sheet_name=sheet_name, index=True, header=True)
+    if SAVE_FILES:
+        for df, sheet_name in zip(dfs, sheet_names):
+            df.to_excel(output_writer, sheet_name=sheet_name, index=True, header=True)
 
-    output_writer.close()
+        output_writer.close()
 
     infer_sequence('0.25', final_composition_low_df, INIT_REFERENCE)
     infer_sequence('median', final_composition_median_df, INIT_REFERENCE)
@@ -181,13 +193,17 @@ def select_ref_sequencies(seq_list, reference):
     left = reference['start_pos'] if PRIMER_TYPE == 'left' else reference['start_pos'] - PRIMER_LENGTH
     right = TOTAL_LENGTH - PRIMER_LENGTH - reference['start_pos'] - len(seq) \
             if PRIMER_TYPE == 'left' else TOTAL_LENGTH - reference['start_pos'] - len(seq)
-
+    matches = []
     if not FUZZY:
         pattern = rf'.{{{left}}}{re.escape(seq)}.{{{right}}}'
         print(f'Positions: {left}-{seq}-{right}')
         matches = [match for seq in seq_list for match in re.findall(pattern, seq)]
+        if COMPLEMENT:
+            comp_seq = reference['complement']
+            pattern = rf'.{{{left}}}{re.escape(comp_seq)}.{{{right}}}'
+            print(f'Positions: {left}-{comp_seq}-{right}')
+            matches.extend([match for comp_seq in seq_list for match in re.findall(pattern, comp_seq)])
     else:
-        matches = []
         for s in seq_list:
             fuzzy_matches = list(set([s[i:i + REFERENCE_LENGTH] for i in range(len(s) - REFERENCE_LENGTH + 1) if
                              fuzz.ratio(s[i:i + REFERENCE_LENGTH], seq) >= 90]))
@@ -252,6 +268,7 @@ def update_reference(df, seq_list, reference, direction = -1):
         try:
             new_ref = {'seq': k + reference['seq'][:-1] if direction == -1 else reference['seq'][1:] + k,
                            'start_pos': new_start}
+            new_ref['complement'] = str(Seq(new_ref['seq'][::-1]).complement())
             sequencies = select_ref_sequencies(seq_list, new_ref)
             new_ref['n_seqs'], new_ref['sequencies'] = len(sequencies), sequencies
             refs.append(new_ref)
@@ -284,7 +301,8 @@ def move_slicing_window(seq_list, reference, init_ref, freq, probabilities, writ
         nonlocal reference, freq
         reference = update_reference(freq, seq_list, reference, direction=direction)
         freq = calculate_probabilities(reference)
-        write_steps_excel(freq, reference, writer)
+        if SAVE_FILES:
+            write_steps_excel(freq, reference, writer)
         probabilities.append(freq)
         plot_probabilities(freq, reference)
 
@@ -300,11 +318,15 @@ def move_slicing_window(seq_list, reference, init_ref, freq, probabilities, writ
     while reference['start_pos'] < right_limit:
         update_window(direction=1)
 
+    print('Moving slicing window has been finished!')
+
+
 def highest_probability_sequence(df):
     """
     Choose sequences that have the greatest likelihood of letters appearing in all positions
     """
     return ''.join(df[column].idxmax() for column in df.columns)
+
 
 def plot_probabilities(df, reference, title=None):
     # Set the colors for each letter
