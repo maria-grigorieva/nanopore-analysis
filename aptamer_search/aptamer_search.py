@@ -1,4 +1,5 @@
 import pandas as pd
+import logging
 import matplotlib.pyplot as plt
 import numpy as np
 from Bio import SeqIO
@@ -9,6 +10,7 @@ import argparse
 import os
 from fuzzywuzzy import fuzz
 import itertools
+
 
 # Define the argument parser
 parser = argparse.ArgumentParser(description='Search an aptamer among low-quality sequences with known length and primers')
@@ -24,7 +26,8 @@ args_info = [
     ['-p', '--pos', int, 'Start position of the reference sequence', -1],
     ['-f', '--fuzzy', bool, 'Add fuzzy search', False],
     ['-s', '--save', bool, 'Save to excel (True/False)', False],
-    ['-c', '--complement', bool, 'Add complementary primer', False]
+    ['-c', '--complement', bool, 'Add complementary primer', False],
+    ['-w', '--weights', bool, 'Take into account nucleotide phred scores', False]
 ]
 
 # Add arguments to the parser
@@ -52,6 +55,7 @@ PRIMER_TYPE = 'left' if START_POS <= PRIMER_LENGTH - REFERENCE_LENGTH else 'righ
 FUZZY = args.fuzzy
 COMPLEMENT = args.complement
 SAVE_FILES = args.save
+PHRED_SCORES = args.weights
 
 # Set all variations of primers
 R_PL, R_PR = PL[::-1], PR[::-1]
@@ -61,23 +65,32 @@ RC_PL, RC_PR = C_PL[::-1], C_PR[::-1]
 
 def main():
 
-    seq_list = merge_sequencies()
+    seq_list = merge_sequences()
 
-    INIT_REFERENCE = {'seq': args.ref, 'complement': str(Seq(args.ref[::-1]).complement()), 'start_pos': args.pos}
-    INIT_REFERENCE['sequencies'] = select_ref_sequencies(seq_list, INIT_REFERENCE)
+    INIT_REFERENCE = {'seq': args.ref,
+                      'complement': str(Seq(PR).complement()[::-1][0:REFERENCE_LENGTH]),
+                      'start_pos': args.pos}
+
+    INIT_REFERENCE['sequences'],\
+    INIT_REFERENCE['scores'] = select_ref_sequences(seq_list, INIT_REFERENCE)
 
     print_info(seq_list, INIT_REFERENCE)
 
     probabilities = []
+    weights_list = []
 
     print(f'''Choosing the sequences that include the initial reference {INIT_REFERENCE['seq']} 
             at {INIT_REFERENCE['start_pos']} position...''')
 
-    print(f'''{len(INIT_REFERENCE['sequencies'])} have been selected with 
+    print(f'''{len(INIT_REFERENCE['sequences'])} have been selected with 
                 {INIT_REFERENCE['seq']} at {INIT_REFERENCE['start_pos']}''')
 
     print(f'''Calculating probabilities of the occurence of letters at each position...''')
-    freq = calculate_probabilities(INIT_REFERENCE, False)
+    freq = calculate_probabilities(INIT_REFERENCE['sequences'])
+    probabilities.append(freq)
+
+    weights = calculate_weights(INIT_REFERENCE['scores'])
+    weights_list.append(weights)
 
     fname = f'''steps_{INIT_REFERENCE['seq']}'''
 
@@ -92,7 +105,13 @@ def main():
     reference = INIT_REFERENCE
 
     print('Moving slicing window...')
-    move_slicing_window(seq_list, reference, INIT_REFERENCE, freq, probabilities, steps_writer)
+    move_slicing_window(seq_list,
+                        reference,
+                        INIT_REFERENCE,
+                        freq,
+                        probabilities,
+                        weights_list,
+                        steps_writer)
 
     if SAVE_FILES:
         steps_writer.close()
@@ -106,6 +125,11 @@ def main():
             merged_data[row] = df.loc[row] if row not in merged_data else \
                 pd.concat([merged_data[row], df.loc[row]], axis=1)
 
+    # Create an empty dict to store the merged weights data
+    weights_df = pd.concat(weights_list)
+    weights_df = scale_dataframe(weights_df)
+    weights_df.reset_index(drop=True, inplace=True)
+
     fname = f'''output_{INIT_REFERENCE['seq']}'''
     if SAVE_FILES:
         output_writer = pd.ExcelWriter(f'{OUTPUT_DIR}/{fname}.xlsx')
@@ -117,11 +141,15 @@ def main():
         # Transpose the merged data for the row
         transposed_data = merged_data[row].transpose()
         transposed_data.reset_index(drop=True, inplace=True)
+
         if SAVE_FILES:
             transposed_data.to_excel(output_writer, sheet_name=f"{row}", index=True, header=True)
-        stats = transposed_data.describe()
+
+        stats = weighted_statistics(transposed_data, weights_df) if PHRED_SCORES else transposed_data.describe()
+
         if SAVE_FILES:
             stats.to_excel(output_writer, sheet_name=f"{row}-stats", index=True, header=True)
+
         final_composition_low[row] = stats.iloc[4].to_numpy()
         final_composition_median[row] = stats.iloc[5].to_numpy()
         final_composition_high[row] = stats.iloc[6].to_numpy()
@@ -137,15 +165,43 @@ def main():
         for df, sheet_name in zip(dfs, sheet_names):
             df.to_excel(output_writer, sheet_name=sheet_name, index=True, header=True)
 
+        weights_df.to_excel(output_writer, sheet_name='Weights', index=True, header=True)
+
         output_writer.close()
 
     infer_sequence('0.25', final_composition_low_df, INIT_REFERENCE)
     infer_sequence('median', final_composition_median_df, INIT_REFERENCE)
     infer_sequence('0.75', final_composition_high_df, INIT_REFERENCE)
 
+def weighted_statistics(df_A, df_B, threshold=0.4):
+    statistics = {
+        'count': [],
+        'mean': [],
+        'std': [],
+        'min': [],
+        '25%': [],
+        '50%': [],
+        '75%': [],
+        'max': []
+    }
+
+    for column in df_A.columns:
+        a_values = df_A.loc[df_B[column] >= threshold, column]
+        statistics['count'].append(np.count_nonzero(~np.isnan(a_values)))
+        statistics['mean'].append(np.mean(a_values))
+        statistics['std'].append(np.std(a_values))
+        statistics['min'].append(np.min(a_values))
+        statistics['25%'].append(np.percentile(a_values, 25))
+        statistics['50%'].append(np.percentile(a_values, 50))
+        statistics['75%'].append(np.percentile(a_values, 75))
+        statistics['max'].append(np.max(a_values))
+
+    return pd.DataFrame(statistics).T
+
+
 def print_info(seq_list, init_ref):
-    print(f'Number of sequences in {DATA_DIR}: {len(seq_list)}')
     # Print out the values of all the arguments
+    print(f'Number of sequences in {DATA_DIR}: {len(seq_list)}')
     print(f"Length of an aptamer: {APTAMER_LENGTH}")
     print(f"Length of a primer: {PRIMER_LENGTH}")
     print(f"Left Primer: {PL}")
@@ -169,18 +225,27 @@ def print_result(result, ref):
     print(f"Found candidate with reference {ref['seq']} at position {ref['start_pos']}:")
     print(f"{primer}---{aptamer}")
 
-def merge_sequencies():
+def merge_sequences():
     """
-    Merge sequencies from a specified directory directory
+    Merge sequences from a specified directory directory
     """
-    return [str(rec.seq) for file_path in glob.glob(f'{DATA_DIR}/*.fastq') for rec in
+    return [{'sequence': str(rec.seq),
+            'score': rec.letter_annotations["phred_quality"]} for file_path in glob.glob(f'{DATA_DIR}/*.fastq') for rec in
                 SeqIO.parse(file_path, "fastq")]
 
-def select_ref_sequencies(seq_list, reference):
+def extract_segment(sequence, score, pattern, matches, scores):
+    interval = [{'start': m.start(0), 'end': m.end(0)} for m in re.finditer(pattern, sequence)]
+    if len(interval) > 0:
+        for i in interval:
+            if not detect_glued_primers(sequence[i['start']:i['end']]):
+                matches.append(sequence[i['start']:i['end']])
+                scores.append(score[i['start']:i['end']])
+
+def select_ref_sequences(seq_list, reference):
     """
     Choose the sequences that include the specified reference sequence
     at the given position from all available sequences.
-    :param seq_list: list of all sequencies
+    :param seq_list: list of all sequences
     :param reference: dict with info about reference, i.e.
     {'seq': 'GGCTTCTGG','start_pos': 31}
     :return: numpy array, i.e.
@@ -194,62 +259,96 @@ def select_ref_sequencies(seq_list, reference):
     right = TOTAL_LENGTH - PRIMER_LENGTH - reference['start_pos'] - len(seq) \
             if PRIMER_TYPE == 'left' else TOTAL_LENGTH - reference['start_pos'] - len(seq)
     matches = []
+    scores = []
     if not FUZZY:
-        pattern = rf'.{{{left}}}{re.escape(seq)}.{{{right}}}'
-        print(f'Positions: {left}-{seq}-{right}')
-        matches = [match for seq in seq_list for match in re.findall(pattern, seq)]
-        if COMPLEMENT:
-            comp_seq = reference['complement']
-            pattern = rf'.{{{left}}}{re.escape(comp_seq)}.{{{right}}}'
-            print(f'Positions: {left}-{comp_seq}-{right}')
-            matches.extend([match for comp_seq in seq_list for match in re.findall(pattern, comp_seq)])
-    else:
-        for s in seq_list:
-            fuzzy_matches = list(set([s[i:i + REFERENCE_LENGTH] for i in range(len(s) - REFERENCE_LENGTH + 1) if
-                             fuzz.ratio(s[i:i + REFERENCE_LENGTH], seq) >= 90]))
-            # remove right shifts
-            filtered_sequences = [s for s in fuzzy_matches if s != seq and s != seq[:-1]]
-            matches.extend(re.findall(rf'.{{{left}}}{re.escape(f)}.{{{right}}}', s) for f in filtered_sequences if
-                           len(filtered_sequences) > 0)
-        matches = list(itertools.chain.from_iterable(matches))
+        for item in seq_list:
+            extract_segment(item['sequence'],
+                            item['score'],
+                            rf'.{{{left}}}{re.escape(seq)}.{{{right}}}',
+                            matches,
+                            scores)
 
-    result = [match for match in matches if not detect_glued_primers(match)]
-    return np.array([list(s) for s in result]) if len(result) > 0 else None
-    #return np.array([list(s) for s in matches]) if len(matches) > 0 else None
+            if COMPLEMENT:
+                comp_seq = reference['complement']
+                extract_segment(item['sequence'],
+                                item['score'],
+                                rf'.{{{left}}}{re.escape(comp_seq)}.{{{right}}}',
+                                matches,
+                                scores)
+
+        matches = np.array([list(s) for s in matches]) if len(matches) > 0 else None
+        scores = np.array([list(s) for s in scores]) if len(matches) > 0 else None
+    else:
+        fuzzy_matches = list(
+            set([item['sequence'][i:i + REFERENCE_LENGTH] for item in seq_list for i in range(len(item['sequence']) - REFERENCE_LENGTH + 1)
+                 if fuzz.ratio(item['sequence'][i:i + REFERENCE_LENGTH], seq) >= 90]))
+
+        for item in seq_list:
+            for fuz in fuzzy_matches:
+                extract_segment(item['sequence'],
+                                item['score'],
+                                rf'.{{{left}}}{re.escape(fuz)}.{{{right}}}',
+                                matches,
+                                scores)
+        matches = np.array([list(s) for s in matches]) if len(matches) > 0 else None
+        scores = np.array([list(s) for s in scores]) if len(matches) > 0 else None
+            # matches.extend(re.findall(rf'.{{{left}}}{re.escape(f)}.{{{right}}}', s) for f in filtered_sequences if
+            #                len(filtered_sequences) > 0)
+        # matches = list(itertools.chain.from_iterable(matches))
+
+    return matches, scores
 
 def detect_glued_primers(ref, length=6):
     return RC_PR[-length:] + PR[:length] in ref or RC_PL[:length] + PR[:length] in ref
 
-def calculate_probabilities(reference, weights = False):
+
+def scale_dataframe(df):
+    # Get the minimum and maximum values for each column
+    min_vals = df.min()
+    max_vals = df.max()
+
+    # Calculate the range for each column
+    ranges = max_vals - min_vals
+
+    # Scale the values of the DataFrame from 0 to 1
+    scaled_df = (df - min_vals) / ranges
+
+    return scaled_df
+
+
+def calculate_weights(scores):
+
+    return pd.DataFrame(scores.mean(axis=0)).T
+
+
+def calculate_probabilities(sequences):
     """
     Calculate probabilities of the appearence of each letter (A,C,G,T)
     at each position of a sequence
-    :param matrix: the output of select_ref_sequencies()
+    :param matrix: the output of sequences()
     :return: pandas DataFrame with the following structure:
     Letter | 0    | 1    | 2   | ....| N
        A   | 0.12 | 0.98 | 1.0 | ... | ...
        C   | ...  | ...  | ... | ... | ...
        ...
     """
-    matrix = reference['sequencies']
-    df = pd.DataFrame({letter: np.sum(matrix == letter, axis=0) / matrix.shape[0]
+    return pd.DataFrame({letter: np.sum(sequences == letter, axis=0) / sequences.shape[0]
                          for letter in ['A', 'C', 'G', 'T']}).T
 
-    return df
 
 def update_reference(df, seq_list, reference, direction = -1):
     """
     Shift the current reference sequence to the left or right and generate a new matrix (numpy array)
     by extracting sequences from the array of all sequences.
     :param df: output of calculate_probabilities() - DataFrame with probabilities
-    :param seq_list: list of all sequencies
+    :param seq_list: list of all sequences
     :param reference: reference dictionary
     :param direction: directions = {'left': -1, 'right': 1}
     :return: new reference record:
        'seq' : reference sequence,
        'start_pos' : start position of the reference in aptamer,
-       'sequencies' : list of extracted sequencies,
-       'n_seq' : number of extracted sequencies
+       'sequences' : list of extracted sequences,
+       'n_seq' : number of extracted sequences
     """
     new_start = reference['start_pos'] + direction
     index = {
@@ -261,22 +360,28 @@ def update_reference(df, seq_list, reference, direction = -1):
 
     letters_probability = df[index].to_dict()
 
-    sorted_dict = dict(sorted(letters_probability.items(), key=lambda item: item[1], reverse=True))
+    #sorted_dict = dict(sorted(letters_probability.items(), key=lambda item: item[1], reverse=True))
 
     refs = []
-    for k, v in sorted_dict.items():
+    for k, v in letters_probability.items():
         try:
             new_ref = {'seq': k + reference['seq'][:-1] if direction == -1 else reference['seq'][1:] + k,
-                           'start_pos': new_start}
-            new_ref['complement'] = str(Seq(new_ref['seq'][::-1]).complement())
-            sequencies = select_ref_sequencies(seq_list, new_ref)
-            new_ref['n_seqs'], new_ref['sequencies'] = len(sequencies), sequencies
+                       'start_pos': new_start}
+            complement = str(Seq(PR).complement()[::-1][0:REFERENCE_LENGTH])
+            new_ref['complement'] = k + complement[:-1] if direction == -1 else complement[1:] + k
+            sequences, scores = select_ref_sequences(seq_list, new_ref)
+            new_ref['n_seqs'], \
+            new_ref['sequences'], \
+            new_ref['scores'] = len(sequences), sequences, scores
+            ref_name = new_ref['seq']
+            n_seqs = new_ref['n_seqs']
+            print(f'Check reference {ref_name}: number of sequences is {n_seqs}')
             refs.append(new_ref)
         except Exception as e:
             continue
     res = max(refs, key=lambda x: x['n_seqs'])
     print(
-        f'''{len(res['sequencies'])} have been selected with {res['seq']} at {res['start_pos']}''')
+        f'''{len(res['sequences'])} have been selected with {res['seq']} at {res['start_pos']}''')
     return res
 
 
@@ -285,25 +390,33 @@ def write_steps_excel(freq, reference, writer=None):
                   sheet_name=reference['seq'],
                   index=True,
                   header=True)
-    pd.DataFrame(reference['sequencies']).to_excel(writer,
+    pd.DataFrame(reference['sequences']).to_excel(writer,
                                                    sheet_name=reference['seq'],
                                                    startrow=freq.shape[0] + 2,
                                                    index=True,
                                                    header=True)
 
 
-def move_slicing_window(seq_list, reference, init_ref, freq, probabilities, writer):
+def move_slicing_window(seq_list, reference, init_ref, freq, probabilities, weights_list, writer):
     left_limit = PRIMER_LENGTH if PRIMER_TYPE == 'right' else 0
     right_limit = TOTAL_LENGTH - REFERENCE_LENGTH - 1 if PRIMER_TYPE == 'right' \
         else TOTAL_LENGTH - PRIMER_LENGTH - REFERENCE_LENGTH - 1
 
     def update_window(direction):
         nonlocal reference, freq
-        reference = update_reference(freq, seq_list, reference, direction=direction)
-        freq = calculate_probabilities(reference)
+        reference = update_reference(freq,
+                                     seq_list,
+                                     reference,
+                                     direction=direction)
+        freq = calculate_probabilities(reference['sequences'])
+        weights = calculate_weights(reference['scores'])
+
         if SAVE_FILES:
             write_steps_excel(freq, reference, writer)
+
         probabilities.append(freq)
+        weights_list.append(weights)
+
         plot_probabilities(freq, reference)
 
     print('Moving left...')
@@ -311,7 +424,8 @@ def move_slicing_window(seq_list, reference, init_ref, freq, probabilities, writ
         update_window(direction=-1)
 
     reference = init_ref
-    freq = calculate_probabilities(reference, False)
+    freq = calculate_probabilities(reference['sequences'])
+
     print('The reference sequence has been reset to the initial value')
 
     print('Moving right...')
