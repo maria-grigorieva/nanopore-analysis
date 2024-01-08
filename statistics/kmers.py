@@ -73,7 +73,7 @@ def get_all_occurrences(reference, all_sequences):
 
 def draw_histogram_sequence(data, reference, bins=50):
     plt.hist(data, bins=bins, edgecolor='black')
-    plt.xlabel('Values')
+    plt.xlabel('Position')
     plt.ylabel('Frequency')
     plt.title(f'Distribution of start positions for {reference}')
     plt.show()
@@ -87,7 +87,7 @@ def draw_histograms(arrays):
     for item in arrays:
         val = item['ref']
         ax.hist(item['occurences'], alpha=0.5, bins='auto', density=True, label=f'{val}')
-    ax.set_xlabel('Value')
+    ax.set_xlabel('Position')
     ax.set_ylabel('Frequency')
     ax.set_title('Histograms of Subarrays')
     ax.legend()
