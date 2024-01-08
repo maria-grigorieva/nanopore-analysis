@@ -3,12 +3,15 @@ import pandas as pd
 from Bio import SeqIO
 import matplotlib.pyplot as plt
 import argparse
+import plotly.graph_objects as go
+
 
 parser = argparse.ArgumentParser(description='Statistics of fastq files')
 args_info = [
     ['-i', '--input', str, 'Path to the fastq input file', 'input_file'],
     ['-k', '--kmer_length', int, 'Length of kmers', 'kmer_length', 30],
     ['-m', '--mode', str, 'Mode', 'max'],
+    ['-n', '--n_seq', int, 'Number of subsequences', 10],
     ['-s', '--save', bool, 'Save to file', False]
 ]
 
@@ -21,6 +24,7 @@ filename = args.input
 kmer_length = args.kmer_length
 save = args.save
 mode = args.mode
+n_seq = args.n_seq
 
 def main():
     sequences = [str(rec.seq) for rec in SeqIO.parse(filename, "fastq")]
@@ -36,10 +40,10 @@ def main():
         occurences = get_all_occurrences(reference, sequences)
         draw_histogram_sequence(occurences, reference)
     elif mode == 'top':
-        # get top-10
-        references = df['kmer'].iloc[0:10]
+        # get topN
+        references = df['kmer'].iloc[0:n_seq]
         occurences = [{'ref': r, 'occurences': get_all_occurrences(r, sequences)} for r in references]
-        draw_histograms(occurences)
+        draw_histograms(occurences, 'plotly')
 
 def save_to_file(df):
     output_filename = f'{kmer_length}_mer_freq.xlsx'
@@ -81,18 +85,36 @@ def draw_histogram_sequence(data, reference, bins=50):
         output_filename = f'{reference}_mer_freq.png'
         plt.savefig(output_filename)
 
-def draw_histograms(arrays):
-    fig, ax = plt.subplots()
+def draw_histograms(arrays, type='matplotlib'):
 
-    for item in arrays:
-        val = item['ref']
-        ax.hist(item['occurences'], alpha=0.5, bins='auto', density=True, label=f'{val}')
-    ax.set_xlabel('Position')
-    ax.set_ylabel('Frequency')
-    ax.set_title('Histograms of Subarrays')
-    ax.legend()
+    if type == 'matplotlib':
+        fig, ax = plt.subplots()
 
-    plt.show()
+        for item in arrays:
+            val = item['ref']
+            ax.hist(item['occurences'], alpha=0.5, bins='auto', density=True, label=f'{val}')
+        ax.set_xlabel('Position')
+        ax.set_ylabel('Frequency')
+        ax.set_title('Histograms of Subarrays')
+        ax.legend()
+
+        plt.show()
+    elif type == 'plotly':
+        fig = go.Figure()
+
+        for item in arrays:
+            val = item['ref']
+            fig.add_trace(go.Histogram(x=item['occurences'], name=val, histnorm='probability'))
+
+        fig.update_layout(
+            xaxis_title='Position',
+            yaxis_title='Frequency',
+            title='Histograms of Subarrays',
+            showlegend=True
+        )
+
+        fig.show()
+
 
 if __name__ == "__main__":
     main()
