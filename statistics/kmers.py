@@ -4,6 +4,7 @@ from Bio import SeqIO
 import matplotlib.pyplot as plt
 import argparse
 import plotly.graph_objects as go
+from collections import Counter
 
 
 parser = argparse.ArgumentParser(description='Statistics of fastq files')
@@ -38,12 +39,47 @@ def main():
         # get the most frequent sequence
         reference = df['kmer'].iloc[0]
         occurences = get_all_occurrences(reference, sequences)
+        value_counts = count_values(occurences)
+        pprint.pprint(value_counts)
         draw_histogram_sequence(occurences, reference)
     elif mode == 'top':
         # get topN
         references = df['kmer'].iloc[0:n_seq]
         occurences = [{'ref': r, 'occurences': get_all_occurrences(r, sequences)} for r in references]
+        peaks = {}
+        diffs = []
+        for i in occurences:
+            ref = i['ref']
+            extremums = []
+            get_extremums_by_occurrences(i['occurences'], extremums)
+            peaks[ref] = extremums
+            differences = [extremums[i + 1] - extremums[i] for i in range(len(extremums) - 1)]
+            diffs.extend(differences)
+
         draw_histograms(occurences, 'plotly')
+        pprint.pprint(peaks)
+        counter = Counter(diffs)
+        max_occurrence = max(counter, key=counter.get)
+        print(f'Most frequent distance between occurences is: {max_occurrence}')
+        # Filtering and sorting
+        filtered_items = [item for item in peaks.items() if abs(item[1][0] - item[1][1]) <= 50]
+        sorted_items = sorted(filtered_items, key=lambda x: x[1][0])
+        # Creating a new dictionary with the filtered and sorted items
+        filtered_dict = {item[0]: item[1] for item in sorted_items}
+        print("Filtered and sorted dictionary:")
+        print(filtered_dict)
+
+        sorted_items = sorted(filtered_dict.items(), key=lambda x: x[1][0])
+        aligned_string = sorted_items[0][0]  # Set the initial aligned string as the first key
+        for i in range(1, len(sorted_items)):
+            key, values = sorted_items[i]
+            prev_key, prev_values = sorted_items[i - 1]
+            shift = values[0] - prev_values[0]
+            aligned_string += key[-shift:]
+
+        print("Aligned string:")
+        print(aligned_string)
+
 
 def save_to_file(df):
     output_filename = f'{kmer_length}_mer_freq.xlsx'
@@ -73,7 +109,28 @@ def get_all_occurrences(reference, all_sequences):
                 break
             positions.append(index)
             start = index + len(reference)
-    return positions
+    return sorted(positions)
+
+def count_values(numbers):
+    value_counts = {}
+    for num in numbers:
+        if num in value_counts:
+            value_counts[num] += 1
+        else:
+            value_counts[num] = 1
+    sorted_counts = sorted(value_counts.items(), key=lambda x: x[1], reverse=True)
+    return sorted_counts
+
+def get_extremums_by_occurrences(arr, extremums, eps=10, chunks=2):
+    counts = Counter(arr)
+    max_occurrence = max(counts.values())
+    peaks = [num for num, count in counts.items() if count == max_occurrence]
+    extremums.append(peaks[0])
+    arr = [num for num in arr if num >= peaks[0]+eps]
+    chunks = chunks - 1
+    if chunks > 0:
+        get_extremums_by_occurrences(arr, extremums, eps, chunks)
+
 
 def draw_histogram_sequence(data, reference, bins=50):
     plt.hist(data, bins=bins, edgecolor='black')
