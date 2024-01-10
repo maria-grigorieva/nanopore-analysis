@@ -1,0 +1,35 @@
+[PL] Primer Left   : CTCCTCTGACTGTAACCACG (99)
+                     TACGTATTGCTAAGGTTAAT (1570)
+[R/PL] Reversed Primer Left : GCACCAATGTCAGTCTCCTC (0)
+[C/PL] Primer Left Complementary : CGTGGTTACAGTCAGAGGAG (51)
+[RC/PL] Reversed Primer Left Complementary : GAGGAGACTGACATTGGTGC (0)
+
+[PR] Primer Right  : GGCTTCTGGACTACCTATGC (95)
+                     GGTGCTGGTTTCATCTATCG (1060)
+[R/PR] Reversed Primer Right : CGTATCCATCAGGTCTTCGG (0)
+[C/PR] Primer Right Complementary : GCATAGGTAGTCCAGAAGCC (60)
+[RC/PR] Reversed Primer Right Complementary : CCGAAGACCTGATGGATACG (0)
+
+[A] Aptamer : TAGGGAAACACGATAGAATCCGAACAGCACC (72)
+              CCATTCCCTCCGATAGATGAAACCAGCACCT (1227)
+[R/A] Reversed Aptamer : CCACGACAAGCCTAAGATAGCACAAAGGGAT (0)
+[C/A] Aptamer Complementary : GGTGCTGTTCGGATTCTATCGTGTTTCCCTA (13)
+[RC/A] Reversed Aptamer Complementary : ATCCCTTTGTGCTATCTTAGGCTTGTCGTGG (0)
+
+Primers Concatenation
+[C/PR --- PR] GAAGCC --- GGCTTC (83)
+[C/PL --- PL] GAGGAG --- CTCCTC (11)
+
+Parts of primers:
+GAAGCC (214)
+GGCTTC (227)
+
+Search example:
+grep -o 'TGGTGCGGCTTC' *.fastq | wc -l
+
+Example of running configuration:
+-i ../input_data -pr GGCTTCTGGACTACCTATGC -pl CTCCTCTGACTGTAACCACG -r GGCTTCTGG -p 51 -s True
+
+
+CCATTCCCTCCGATAGATGAAACCAGCACCT (1228)
+

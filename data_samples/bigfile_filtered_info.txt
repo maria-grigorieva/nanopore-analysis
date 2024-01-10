@@ -1,0 +1,14 @@
+bigfile_filtered.fastq
+
+N sequences = 12290
+
+[PL] Primer Left   : CTCCTCTGACTGTAACCACG (14647)
+[C/PL] Primer Left Complementary : CGTGGTTACAGTCAGAGGAG (3235)
+
+[PR] Primer Right  : GGCTTCTGGACTACCTATGC (9071)
+[C/PR] Primer Right Complementary : GCATAGGTAGTCCAGAAGCC (7821)
+
+[A] Aptamer 31 : AAAACACACACCGTGGTTACAGTCAGAGGAG (0)
+    Aptamer 21 : CCGTGGTTACAGTCAGAGGAG (1212)
+    Aptamer 24 : ACACCGTGGTTACAGTCAGAGGAG (213)
+[C/A] Aptamer Complementary :
