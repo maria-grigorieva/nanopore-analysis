@@ -21,9 +21,9 @@ def plot_fastq_qualities(filename, ax=None, limit=20000, seq_len=100, boxplots=F
     while not finished:
         try:
             for record in fastq_parser:
-                if len(record.letter_annotations["phred_quality"]) >= seq_len:
-                    score=record.letter_annotations["phred_quality"][:seq_len-1]
-                    res.append(score)
+                #if len(record.letter_annotations["phred_quality"]) >= seq_len:
+                score=record.letter_annotations["phred_quality"][:seq_len-1]
+                res.append(score)
             c += 1
             if c > limit:
                 break

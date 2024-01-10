@@ -10,6 +10,7 @@ import argparse
 import os
 from fuzzywuzzy import fuzz
 import itertools
+from pathlib import Path
 
 
 # Define the argument parser
@@ -18,8 +19,8 @@ parser = argparse.ArgumentParser(description='Search an aptamer among low-qualit
 # Define the arguments
 args_info = [
     ['-al', '--alen', int, 'Length of an aptamer', 31],
-    ['-i', '--input', str, 'Directory with input data', 'input_data'],
-    ['-o', '--output', str, 'Directory with output data', 'output'],
+    ['-i', '--input', str, 'Path to the input fastq file', 'input_data'],
+    ['-o', '--output', str, 'Directory with output data', '../results'],
     ['-pl', '--left_primer', str, 'Left Primer', None],
     ['-pr', '--right_primer', str, 'Right Primer', None],
     ['-r', '--ref', str, 'Initial reference sequence', 'auto'],
@@ -42,8 +43,8 @@ APTAMER_LENGTH, PL, PR = args.alen, args.left_primer, args.right_primer
 PRIMER_LENGTH = len(PL)
 TOTAL_LENGTH = APTAMER_LENGTH + PRIMER_LENGTH * 2
 
-DATA_DIR = args.input
-OUTPUT_DIR = f'{DATA_DIR}/{args.output}'
+FILE_PATH = args.input
+OUTPUT_DIR = f'../results/{args.output}'
 PLOTS_DIR = f'{OUTPUT_DIR}/plots/references'
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(PLOTS_DIR, exist_ok=True)
@@ -65,7 +66,7 @@ RC_PL, RC_PR = C_PL[::-1], C_PR[::-1]
 
 def main():
 
-    seq_list = merge_sequences()
+    seq_list = get_sequences()
 
     INIT_REFERENCE = {'seq': args.ref,
                       'complement': str(Seq(PR).complement()[::-1][0:REFERENCE_LENGTH]),
@@ -201,12 +202,12 @@ def weighted_statistics(df_A, df_B, threshold=0.4):
 
 def print_info(seq_list, init_ref):
     # Print out the values of all the arguments
-    print(f'Number of sequences in {DATA_DIR}: {len(seq_list)}')
+    print(f'Number of sequences in {FILE_PATH}: {len(seq_list)}')
     print(f"Length of an aptamer: {APTAMER_LENGTH}")
     print(f"Length of a primer: {PRIMER_LENGTH}")
     print(f"Left Primer: {PL}")
     print(f"Right Primer: {PR}")
-    print(f"Directory with input data: {DATA_DIR}")
+    print(f"Input file: {FILE_PATH}")
     print(f"Directory for the output: {OUTPUT_DIR}")
     print(f"Initial reference length: {REFERENCE_LENGTH}")
     print(f"Initial reference sequence: {init_ref['seq']}")
@@ -225,12 +226,12 @@ def print_result(result, ref):
     print(f"Found candidate with reference {ref['seq']} at position {ref['start_pos']}:")
     print(f"{primer}---{aptamer}")
 
-def merge_sequences():
+def get_sequences():
     """
     Merge sequences from a specified directory directory
     """
     return [{'sequence': str(rec.seq),
-            'score': rec.letter_annotations["phred_quality"]} for file_path in glob.glob(f'{DATA_DIR}/*.fastq') for rec in
+            'score': rec.letter_annotations["phred_quality"]} for file_path in glob.glob(f'{FILE_PATH}') for rec in
                 SeqIO.parse(file_path, "fastq")]
 
 def extract_segment(sequence, score, pattern, matches, scores):

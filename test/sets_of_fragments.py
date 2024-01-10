@@ -4,7 +4,7 @@ from collections import Counter
 from itertools import combinations
 from functools import reduce
 
-sequences = get_list_of_sequences('data/FAP38830_pass_barcode02_bcc3428d_0.fastq')
+sequences = get_list_of_sequences('../input_data/merged.fastq')
 fragments_df = pd.read_excel('fragments.xlsx')
 fragments_df.sort_values(by='occurences', inplace=True, ascending=False)
 fragments = fragments_df['fragment'].values[0:20]

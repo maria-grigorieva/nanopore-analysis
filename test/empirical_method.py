@@ -5,13 +5,45 @@ from Bio import SeqIO
 from Bio.Seq import Seq
 
 import os
-from extract_from_fastq import get_list_of_sequences
+# from extract_from_fastq import get_list_of_sequences
+
+sequences = [str(rec.seq) for rec in SeqIO.parse('../input_data/merged.fastq', "fastq")]
+from collections import Counter
+import re
+
+def get_all_kmers(seq_list, kmer_length, step=1):
+    kmers = [seq[i:i + kmer_length] for seq in seq_list for i in range(0, len(seq) - kmer_length + 1, step)]
+    print(f'Number of unique {kmer_length}-fragments: {len(kmers)}')
+    d = dict(Counter(kmers))
+    return {key: value for key, value in d.items() if value >= 3000}
+
+def find_equal_substrings(strings):
+
+    candidates = get_all_kmers(strings, 8)
+    print(candidates)
+    found_substrings = []
+    for c in candidates:
+        print(c)
+        for s in strings:
+            matches = re.findall(rf'{re.escape(c)}.{{31}}{re.escape(c)}', s)
+            found_substrings.extend(matches)
+    substring_frequency = dict(Counter(found_substrings))
+    return substring_frequency
+
+# subs = find_equal_substrings(sequences)
+# print(len(subs))
+# print(subs)
+# sorted_data = dict(sorted(subs.items(), key=lambda x: x[1], reverse=True))
+# print(sorted_data)
+
+
+
 
 DATA_DIR = 'new_data'
 OUTPUT_DIR = 'new_data/output'
-# INPUT_DATA = 'FAP38830_pass_barcode04_bcc3428d_0'
+INPUT_DATA = 'FAP38830_pass_barcode04_bcc3428d_0'
 FILETYPE = 'fastq'
-# OUTPUT_FILE = f'{INPUT_DATA}.xlsx'
+OUTPUT_FILE = f'{INPUT_DATA}.xlsx'
 
 # get k-mers frequences
 def count_kmers(sequences, kmer_length=70, step=1):
@@ -34,10 +66,10 @@ def count_kmers(sequences, kmer_length=70, step=1):
 
 
 # Save k-mer frequencies to Excel file
-def save_kmers(df, input_data):
-    kmer_len = len(df['kmer'].values[0])
-    output_filename = f'{OUTPUT_DIR}/{input_data}_{kmer_len}_mer_freq.xlsx'
-    df.to_excel(output_filename)
+# def save_kmers(df, input_data):
+#     kmer_len = len(df['kmer'].values[0])
+#     output_filename = f'{OUTPUT_DIR}/{input_data}_{kmer_len}_mer_freq.xlsx'
+#     df.to_excel(output_filename)
 
 
 def plot_frequencies_dist(df, output_path):
@@ -50,19 +82,68 @@ def plot_frequencies_dist(df, output_path):
     plt.savefig(output_file)
 
 
-def search_aptamers(seq_list, input_data, output_file):
+def find_longest_substring(strings):
+    from difflib import SequenceMatcher
+    aptamers = []
+    start = strings[0]
+    for i in strings[1:]:
+        match = SequenceMatcher(None, start, i).find_longest_match()
+        print(match)  # -> Match(a=0, b=15, size=9)
+        if match.size >= 31:
+            start = start[match.a:match.a + match.size]
+            if match.size == 31:
+                aptamers.append(start)
+            print(start[match.a:match.a + match.size])
+        # print(i[match.b:match.b + match.size])
+    print(set(aptamers))
+    return list(set(aptamers))[0]
+
+def get_primers(strings, aptamer):
+    from collections import Counter
+    left = []
+    right = []
+
+    for s in strings:
+        if aptamer in s:
+            start = s.find(aptamer)
+            end = start + len(aptamer) - 1
+            left_primer = s[start-20:start]
+            right_primer = s[end:end+20]
+            if len(left_primer) == 20:
+                left.append(left_primer)
+            if len(right_primer) == 20:
+                right.append(right_primer)
+    print(Counter(left))
+    print(Counter(right))
+
+def search_aptamers(seq_list):
+                    # input_data, output_file):
 
     frequencies_70 = count_kmers(seq_list, 70)
     #save_kmers(frequencies_70, input_data)
     #
     # df = pd.read_excel('new_data/output/70_mer_frequencies.xlsx')
     df = frequencies_70.sort_values(by='frequency', ascending=False)
-    seq_list = df[df['frequency']>=5]['kmer'].tolist()
+    seq_list = df[df['frequency']>=100]['kmer'].tolist()
+    #df[df['frequency']>=10].to_excel('71-mers.xlsx')
 
-    result_df = count_kmers(seq_list, 31)
-    print(result_df)
+    longest = find_longest_substring(df[df['frequency']>=5]['kmer'].tolist())
+    print(longest)
+    get_primers(df[df['frequency']>=5]['kmer'].tolist(),longest
+                )
+    # result_df = count_kmers(seq_list, 31)
+    # print(result_df)
 
-    result_df.to_excel(f'{OUTPUT_DIR}/{output_file}')
+    # result_df.to_excel(f'{OUTPUT_DIR}/{output_file}')
+
+
+search_aptamers(sequences)
+
+
+# Example usage
+string_list = ["abcdefg", "bcde", "cdef"]
+longest_substring = find_longest_substring(string_list)
+print("Longest common substring:", longest_substring)
 
 
 def search_primers(seq_list, input_data, output_file):
@@ -139,7 +220,7 @@ def get_stats():
     print(pivot_df)
     pivot_df.to_excel('new_data/output/stats_v1.xlsx')
 
-get_stats()
+# get_stats()
 # fastq_iterator('primer')
 
 def excel_to_fasta_converter(input_file, output_file):
@@ -211,9 +292,6 @@ def excel_to_fasta_converter(input_file, output_file):
 #     plot_frequencies_dist(frequencies, 'new_data/output/plots')
 
 
-
-
-def get_all_kmers(seq_list, kmer_length, step=1):
-    kmers = list(set(seq[i:i + kmer_length] for seq in seq_list for i in range(0, len(seq) - kmer_length + 1, step)))
-    print(f'Number of unique {kmer_length}-fragments: {len(kmers)}')
-    return kmers
+#
+# df = count_kmers(sequences, kmer_length=31, step=1)
+# df.to_excel('31_mers.xlsx')

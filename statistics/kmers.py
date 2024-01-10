@@ -5,6 +5,9 @@ import matplotlib.pyplot as plt
 import argparse
 import plotly.graph_objects as go
 from collections import Counter
+from Levenshtein import distance as lev
+from difflib import SequenceMatcher
+import re
 
 
 parser = argparse.ArgumentParser(description='Statistics of fastq files')
@@ -13,7 +16,9 @@ args_info = [
     ['-k', '--kmer_length', int, 'Length of kmers', 'kmer_length', 30],
     ['-m', '--mode', str, 'Mode', 'max'],
     ['-n', '--n_seq', int, 'Number of subsequences', 10],
-    ['-s', '--save', bool, 'Save to file', False]
+    ['-s', '--save', bool, 'Save to file', False],
+    ['-pl', '--left_primer', str, 'Left Primer', None],
+    ['-pr', '--right_primer', str, 'Right Primer', None]
 ]
 
 for arg_info in args_info:
@@ -26,6 +31,8 @@ kmer_length = args.kmer_length
 save = args.save
 mode = args.mode
 n_seq = args.n_seq
+pl = args.left_primer
+pr = args.right_primer
 
 def main():
     sequences = [str(rec.seq) for rec in SeqIO.parse(filename, "fastq")]
@@ -62,7 +69,7 @@ def main():
         max_occurrence = max(counter, key=counter.get)
         print(f'Most frequent distance between occurences is: {max_occurrence}')
         # Filtering and sorting
-        filtered_items = [item for item in peaks.items() if abs(item[1][0] - item[1][1]) <= 50]
+        filtered_items = [item for item in peaks.items() if abs(item[1][0] - item[1][1]) <= max_occurrence]
         sorted_items = sorted(filtered_items, key=lambda x: x[1][0])
         # Creating a new dictionary with the filtered and sorted items
         filtered_dict = {item[0]: item[1] for item in sorted_items}
@@ -74,8 +81,9 @@ def main():
         for i in range(1, len(sorted_items)):
             key, values = sorted_items[i]
             prev_key, prev_values = sorted_items[i - 1]
-            shift = values[0] - prev_values[0]
-            aligned_string += key[-shift:]
+            if prev_key[1:] == key[:-1]:
+                shift = values[0] - prev_values[0]
+                aligned_string += key[-shift:]
 
         print("Aligned string:")
         print(aligned_string)
@@ -85,15 +93,30 @@ def save_to_file(df):
     output_filename = f'{kmer_length}_mer_freq.xlsx'
     df.to_excel(output_filename)
 
-def count_kmers(sequences, kmer_length=70, step=1, threshold=5):
+def check_for_repeatable(string):
+    unigram_pattern = r'(.){4,}'  # Matches any character repeated 5 or more times consecutively
+    bigram_pattern = r'(..){4,}'  # Matches repeatable bigrams
+    # trigram_pattern = r'(...){4,}'
+
+    return (re.search(unigram_pattern, string) is None) and\
+           (re.search(bigram_pattern, string) is None)
+           # (re.search(trigram_pattern, string) is None)
+
+
+def count_kmers(sequences, kmer_length=30, step=10, threshold=5):
 
     kmer_frequencies = {}
     for sequence in sequences:
         for i in range(0, len(sequence) - kmer_length + 1, step):
             kmer = sequence[i:i + kmer_length]
-            if kmer not in kmer_frequencies:
-                kmer_frequencies[kmer] = 0
-            kmer_frequencies[kmer] += 1
+            if check_for_repeatable(kmer):
+                ratio_pl = SequenceMatcher(None, kmer, pl).ratio()
+                ratio_pr = SequenceMatcher(None, kmer, pr).ratio()
+                if ratio_pl <= 0.4:
+                    if ratio_pr <= 4:
+                        if kmer not in kmer_frequencies:
+                            kmer_frequencies[kmer] = 0
+                        kmer_frequencies[kmer] += 1
     df = pd.DataFrame(kmer_frequencies.items(), columns=['kmer', 'frequency'])
     df = df.sort_values('frequency', ascending=False)
     return df[df['frequency'] > threshold]

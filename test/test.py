@@ -8,32 +8,35 @@ from Bio.pairwise2 import format_alignment
 from Bio import Align
 from Bio.SeqRecord import SeqRecord
 
-filename = "data/FAP38830_pass_barcode02_bcc3428d_0.fastq"
+filename = "../data_samples/barcodes/FAP38830_pass_barcode04_bcc3428d_0.fastq"
 
-count = 0
-for rec in SeqIO.parse(filename, "fastq"):
-    count += 1
-print("%i reads" % count)
-
-good_reads = (
-    rec
-    for rec in SeqIO.parse(filename, "fastq")
-    if max(rec.letter_annotations["phred_quality"]) >= 20
-)
-count = SeqIO.write(good_reads, "good_quality.fastq", "fastq")
-print("Saved %i reads" % count)
+# count = 0
+# for rec in SeqIO.parse(filename, "fastq"):
+#     count += 1
+# print("%i reads" % count)
+#
+# good_reads = (
+#     rec
+#     for rec in SeqIO.parse(filename, "fastq")
+#     if max(rec.letter_annotations["phred_quality"]) >= 20
+# )
+# count = SeqIO.write(good_reads, "good_quality.fastq", "fastq")
+# print("Saved %i reads" % count)
 
 errors = []
 phred_qualities = []
 for rec in SeqIO.parse(filename, "fastq"):
-    phred_quality = np.mean(rec.letter_annotations["phred_quality"])
-    phred_qualities.append(phred_quality)
-    error = 10 ** (- phred_quality / 10)
-    errors.append(error)
+    #phred_quality = np.mean(rec.letter_annotations["phred_quality"])
+    phred_qualities.append(rec.letter_annotations["phred_quality"])
+    errors.append([10 ** ( -item / 10) for item in rec.letter_annotations["phred_quality"]])
+    #error = 10 ** (- phred_quality / 10)
+    # errors.append(error)
     # print(rec.seq)
 
-sizes = [len(rec.seq) for rec in SeqIO.parse(filename, "fastq")]
-len(sizes), min(sizes), max(sizes)
+print(phred_qualities)
+# print(errors)
+# sizes = [len(rec.seq) for rec in SeqIO.parse(filename, "fastq")]
+# len(sizes), min(sizes), max(sizes)
 
 # import matplotlib as mpl
 # import matplotlib.pyplot as plt
@@ -88,28 +91,28 @@ import pylab
 
 
 # convert FASTQ to FASTA
-sequences = []
-for rec in SeqIO.parse(filename, "fastq"):
-    sequences.append(rec)
-
-print(sequences)
-
-records = []
-for rec in sequences:
-    records.append(SeqRecord(rec.seq,rec.id))
-
-SeqIO.write(records, "example.fasta", "fasta")
-
-sequences = [rec.seq for rec in SeqIO.parse(filename, "fastq")]
-longest_length = max(len(s) for s in sequences)
-print(longest_length)
-padded_sequences = [str(s).ljust(longest_length, '-') for s in sequences]
-records = (SeqRecord(Seq(s)) for s in padded_sequences)
-SeqIO.write(records, "example.fasta", "fasta")
-
-alignment = AlignIO.read("example.fasta", "fasta")
-print(alignment)
-
-from Bio.Align.Applications import MuscleCommandline
-cline = MuscleCommandline(input="example.fasta", out="msa.txt")
-print(cline)
+# sequences = []
+# for rec in SeqIO.parse(filename, "fastq"):
+#     sequences.append(rec)
+#
+# print(sequences)
+#
+# records = []
+# for rec in sequences:
+#     records.append(SeqRecord(rec.seq,rec.id))
+#
+# SeqIO.write(records, "example.fasta", "fasta")
+#
+# sequences = [rec.seq for rec in SeqIO.parse(filename, "fastq")]
+# longest_length = max(len(s) for s in sequences)
+# print(longest_length)
+# padded_sequences = [str(s).ljust(longest_length, '-') for s in sequences]
+# records = (SeqRecord(Seq(s)) for s in padded_sequences)
+# SeqIO.write(records, "example.fasta", "fasta")
+#
+# alignment = AlignIO.read("example.fasta", "fasta")
+# print(alignment)
+#
+# from Bio.Align.Applications import MuscleCommandline
+# cline = MuscleCommandline(input="example.fasta", out="msa.txt")
+# print(cline)

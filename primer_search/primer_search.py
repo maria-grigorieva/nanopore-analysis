@@ -107,7 +107,7 @@ def process_fastq_file(file_path):
                     line += '*'
             print(line)
 # Example usage:
-fastq_file_path = '../input_data/FAP38830_pass_barcode04_bcc3428d_0.fastq'
+fastq_file_path = '../data_samples/barcodes/FAP38830_pass_barcode04_bcc3428d_0.fastq'
 process_fastq_file(fastq_file_path)
 
 #
