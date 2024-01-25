@@ -11,6 +11,7 @@ import os
 from fuzzywuzzy import fuzz
 import itertools
 from pathlib import Path
+from difflib import SequenceMatcher
 
 
 # Define the argument parser
@@ -67,6 +68,11 @@ RC_PL, RC_PR = C_PL[::-1], C_PR[::-1]
 def main():
 
     seq_list = get_sequences()
+    print(len(seq_list))
+
+    # todo: remove whole sequences with glued primers?
+    seq_list = [s for s in seq_list if not glued_primers(s['sequence'], 9)]
+    print(len(seq_list))
 
     INIT_REFERENCE = {'seq': args.ref,
                       'complement': str(Seq(PR).complement()[::-1][0:REFERENCE_LENGTH]),
@@ -146,7 +152,8 @@ def main():
         if SAVE_FILES:
             transposed_data.to_excel(output_writer, sheet_name=f"{row}", index=True, header=True)
 
-        stats = weighted_statistics(transposed_data, weights_df) if PHRED_SCORES else transposed_data.describe()
+        #stats = weighted_statistics(transposed_data, weights_df) if PHRED_SCORES else transposed_data.describe()
+        stats = transposed_data.describe()
 
         if SAVE_FILES:
             stats.to_excel(output_writer, sheet_name=f"{row}-stats", index=True, header=True)
@@ -228,19 +235,27 @@ def print_result(result, ref):
 
 def get_sequences():
     """
-    Merge sequences from a specified directory directory
+    Merge sequences from a specified directory
     """
     return [{'sequence': str(rec.seq),
             'score': rec.letter_annotations["phred_quality"]} for file_path in glob.glob(f'{FILE_PATH}') for rec in
                 SeqIO.parse(file_path, "fastq")]
 
 def extract_segment(sequence, score, pattern, matches, scores):
+    # glued_primers_counter = []
     interval = [{'start': m.start(0), 'end': m.end(0)} for m in re.finditer(pattern, sequence)]
     if len(interval) > 0:
         for i in interval:
-            if not detect_glued_primers(sequence[i['start']:i['end']]):
-                matches.append(sequence[i['start']:i['end']])
+            s = sequence[i['start']:i['end']]
+            sub_s = s[:START_POS - REFERENCE_LENGTH] if PRIMER_TYPE == 'right' else s[PRIMER_LENGTH:]
+            if not is_primer(sub_s) and not glued_primers(s):
+                # print(f'Sequence: {s} has been written to list')
+                matches.append(s)
                 scores.append(score[i['start']:i['end']])
+            # else:
+            #     glued_primers_counter.append(s)
+    # if len(glued_primers_counter) > 0:
+    #     print(f'{glued_primers_counter} removed!')
 
 def select_ref_sequences(seq_list, reference):
     """
@@ -279,6 +294,8 @@ def select_ref_sequences(seq_list, reference):
 
         matches = np.array([list(s) for s in matches]) if len(matches) > 0 else None
         scores = np.array([list(s) for s in scores]) if len(matches) > 0 else None
+        matches = bad_phred_score_remover(matches, scores)
+        # matches, scores = bad_sequences_remover(matches, scores)
     else:
         fuzzy_matches = list(
             set([item['sequence'][i:i + REFERENCE_LENGTH] for item in seq_list for i in range(len(item['sequence']) - REFERENCE_LENGTH + 1)
@@ -299,9 +316,43 @@ def select_ref_sequences(seq_list, reference):
 
     return matches, scores
 
-def detect_glued_primers(ref, length=6):
-    return RC_PR[-length:] + PR[:length] in ref or RC_PL[:length] + PR[:length] in ref
+def bad_sequences_remover(matches, scores, threshold=15):
+    for i in range(scores.shape[0] - 1, -1, -1):
+        if np.mean(scores[i]) < threshold:
+            scores = np.delete(scores, i, axis=0)
+            # Remove the corresponding element in 'matches' using the same index
+            matches = np.delete(matches, i, axis=0)
+    return matches, scores
 
+def bad_phred_score_remover(matches, scores, threshold=15):
+    for i, subarray in enumerate(scores):
+        for j, nucleotide in enumerate(subarray):
+            if nucleotide <= threshold:
+                matches[i][j] = None
+    return matches
+
+def glued_primers(ref, length=6, threshold=90):
+    substrings = [ref[i:i + length*2] for i in range(len(ref) - length*2 + 1)]
+    for s in substrings:
+        if (fuzz.ratio(s, RC_PR[-length:] + PR[:length]) >= threshold or \
+            fuzz.ratio(s, RC_PL[-length:] + PR[:length]) >= threshold or \
+            fuzz.ratio(s, RC_PR[-length:] + PL[:length]) >= threshold):
+            return True
+    return False
+def is_primer(ref, threshold=90):
+    # filter out sequences with primers at a wrong position
+    substrings = [ref[i:i + PRIMER_LENGTH] for i in range(len(ref) - PRIMER_LENGTH + 1)]
+    for s in substrings:
+        if (fuzz.ratio(s, PR) >= threshold or \
+                fuzz.ratio(s, PL) >= threshold or \
+                fuzz.ratio(s, R_PL) >= threshold or \
+                fuzz.ratio(s, R_PR) >= threshold or \
+                fuzz.ratio(s, C_PL) >= threshold or \
+                fuzz.ratio(s, C_PR) >= threshold or \
+                fuzz.ratio(s, RC_PL) >= threshold or \
+                fuzz.ratio(s, RC_PR) >= threshold):
+            return True
+    return False
 
 def scale_dataframe(df):
     # Get the minimum and maximum values for each column
