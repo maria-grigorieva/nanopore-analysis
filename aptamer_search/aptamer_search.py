@@ -12,6 +12,9 @@ from fuzzywuzzy import fuzz
 import itertools
 from pathlib import Path
 from difflib import SequenceMatcher
+import tqdm
+from PIL import Image, ImageDraw
+import math
 
 
 # Define the argument parser
@@ -29,7 +32,9 @@ args_info = [
     ['-f', '--fuzzy', bool, 'Add fuzzy search', False],
     ['-s', '--save', bool, 'Save to excel (True/False)', False],
     ['-c', '--complement', bool, 'Add complementary primer', False],
-    ['-w', '--weights', bool, 'Take into account nucleotide phred scores', False]
+    ['-w', '--weights', bool, 'Take into account nucleotide phred scores', False],
+    ['-ph', '--cutoff', int, 'Phred score cut off', 15],
+    ['-cl', '--initial_cleaning', bool, 'Initial cleaning of sequences from glued primers', True]
 ]
 
 # Add arguments to the parser
@@ -47,6 +52,7 @@ TOTAL_LENGTH = APTAMER_LENGTH + PRIMER_LENGTH * 2
 FILE_PATH = args.input
 OUTPUT_DIR = f'../results/{args.output}'
 PLOTS_DIR = f'{OUTPUT_DIR}/plots/references'
+LOG_FILE = f'{OUTPUT_DIR}/app.log'
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(PLOTS_DIR, exist_ok=True)
 
@@ -58,21 +64,24 @@ FUZZY = args.fuzzy
 COMPLEMENT = args.complement
 SAVE_FILES = args.save
 PHRED_SCORES = args.weights
+PHRED_CUTOFF = args.cutoff
+CLEAN = args.initial_cleaning
 
 # Set all variations of primers
 R_PL, R_PR = PL[::-1], PR[::-1]
 C_PL, C_PR = str(Seq(PL).complement()), str(Seq(PR).complement())
 RC_PL, RC_PR = C_PL[::-1], C_PR[::-1]
 
+# logging.basicConfig(filename=LOG_FILE, filemode='w', format='%(name)s - %(levelname)s - %(message)s')
 
 def main():
 
-    seq_list = get_sequences()
-    print(len(seq_list))
+    seq_list = get_sequences(clean=CLEAN)
+    print(f'{len(seq_list)} sequences have been read!')
 
     # todo: remove whole sequences with glued primers?
-    seq_list = [s for s in seq_list if not glued_primers(s['sequence'], 9)]
-    print(len(seq_list))
+    # seq_list = [s for s in seq_list if not glued_primers(s['sequence'], 9)]
+    # print(len(seq_list))
 
     INIT_REFERENCE = {'seq': args.ref,
                       'complement': str(Seq(PR).complement()[::-1][0:REFERENCE_LENGTH]),
@@ -233,29 +242,85 @@ def print_result(result, ref):
     print(f"Found candidate with reference {ref['seq']} at position {ref['start_pos']}:")
     print(f"{primer}---{aptamer}")
 
-def get_sequences():
+def get_sequences(clean=True, mode='complete'):
     """
     Merge sequences from a specified directory
     """
-    return [{'sequence': str(rec.seq),
-            'score': rec.letter_annotations["phred_quality"]} for file_path in glob.glob(f'{FILE_PATH}') for rec in
-                SeqIO.parse(file_path, "fastq")]
+    results = []
+    records = list(SeqIO.parse(FILE_PATH, "fastq"))
+    print(f'Initial number of records in {FILE_PATH}: {len(records)}')
+    print('Reading file...')
+    with open(f'{OUTPUT_DIR}/internal.fastq', 'w') as file:
+        for rec in tqdm.tqdm(records, total=len(list(records)), leave=False, desc=FILE_PATH):
+            sequence = str(rec.seq)
+            score = rec.letter_annotations["phred_quality"]
+            if clean:
+                if glued_primers(sequence, length=PRIMER_LENGTH) is not None:
+                    if mode == 'partial':
+                        sequence, score = remove_glued_substring(sequence, score)
+                    else:
+                        continue
+            results.append({'sequence': sequence,
+                            'score': score})
+            SeqIO.write(rec, file, 'fastq')
+    print(f'{len(results)} sequences have been read!')
+    create_image_with_colored_sequence(results[0:1000], f'{OUTPUT_DIR}/internal.png')
+    print(f'Internal fastq file has been written.')
+    return results
+
+def create_image_with_colored_sequence(records, output_file, limit=200):
+    width = 20  # Width of each character box
+    height = 20  # Height of each character box
+    padding = 5  # Padding between character boxes
+    max_score = 40  # Maximum score
+    colors = [(255, 0, 0), (255, 165, 0), (0, 128, 0)]  # Red, Orange, Green
+
+    # Calculate the total width and height of the image
+    #total_width = max(len(record['sequence']) for record in records) * (width + padding)
+    total_width = limit * (width + padding)
+    total_height = height * len(records)
+
+    image = Image.new("RGB", (total_width, total_height), "white")
+    draw = ImageDraw.Draw(image)
+
+    y = 0
+
+    for record in records:
+        sequence = record['sequence']
+        scores = record['score']
+
+        x = 0
+
+        for i, score in enumerate(scores):
+            character = sequence[i]
+
+            # Calculate the color based on the score
+            normalized_score = score / max_score  # Normalize the score between 0 and 1
+            red = int(255 * (1 - normalized_score))
+            green = int(255 * normalized_score)
+            color = (red, green, 0)
+
+            # Draw the character box with the corresponding color
+            draw.rectangle([x, y, x + width, y + height], fill=color)
+            draw.text((x+8, y), character, fill="black")
+
+            x += width + padding
+
+        y += height
+
+    image.save(output_file)
+
+
 
 def extract_segment(sequence, score, pattern, matches, scores):
-    # glued_primers_counter = []
     interval = [{'start': m.start(0), 'end': m.end(0)} for m in re.finditer(pattern, sequence)]
     if len(interval) > 0:
         for i in interval:
             s = sequence[i['start']:i['end']]
             sub_s = s[:START_POS - REFERENCE_LENGTH] if PRIMER_TYPE == 'right' else s[PRIMER_LENGTH:]
             if not is_primer(sub_s) and not glued_primers(s):
-                # print(f'Sequence: {s} has been written to list')
                 matches.append(s)
                 scores.append(score[i['start']:i['end']])
-            # else:
-            #     glued_primers_counter.append(s)
-    # if len(glued_primers_counter) > 0:
-    #     print(f'{glued_primers_counter} removed!')
 
 def select_ref_sequences(seq_list, reference):
     """
@@ -295,7 +360,6 @@ def select_ref_sequences(seq_list, reference):
         matches = np.array([list(s) for s in matches]) if len(matches) > 0 else None
         scores = np.array([list(s) for s in scores]) if len(matches) > 0 else None
         matches = bad_phred_score_remover(matches, scores)
-        # matches, scores = bad_sequences_remover(matches, scores)
     else:
         fuzzy_matches = list(
             set([item['sequence'][i:i + REFERENCE_LENGTH] for item in seq_list for i in range(len(item['sequence']) - REFERENCE_LENGTH + 1)
@@ -310,9 +374,6 @@ def select_ref_sequences(seq_list, reference):
                                 scores)
         matches = np.array([list(s) for s in matches]) if len(matches) > 0 else None
         scores = np.array([list(s) for s in scores]) if len(matches) > 0 else None
-            # matches.extend(re.findall(rf'.{{{left}}}{re.escape(f)}.{{{right}}}', s) for f in filtered_sequences if
-            #                len(filtered_sequences) > 0)
-        # matches = list(itertools.chain.from_iterable(matches))
 
     return matches, scores
 
@@ -331,14 +392,30 @@ def bad_phred_score_remover(matches, scores, threshold=15):
                 matches[i][j] = None
     return matches
 
+def remove_glued_substring(sequence, score):
+    indices = []
+    start_index = 0
+    substr = glued_primers(sequence, length=PRIMER_LENGTH)
+    while True:
+        index = sequence.find(substr, start_index)
+        if index == -1:
+            break
+        indices.append(index)
+        sequence = sequence[:index] + sequence[index+len(substr):]
+        score = score[:index] + score[index + len(substr):]
+        start_index = index
+    return sequence, score
+
+
 def glued_primers(ref, length=6, threshold=90):
     substrings = [ref[i:i + length*2] for i in range(len(ref) - length*2 + 1)]
     for s in substrings:
         if (fuzz.ratio(s, RC_PR[-length:] + PR[:length]) >= threshold or \
             fuzz.ratio(s, RC_PL[-length:] + PR[:length]) >= threshold or \
             fuzz.ratio(s, RC_PR[-length:] + PL[:length]) >= threshold):
-            return True
-    return False
+            return s
+    return None
+
 def is_primer(ref, threshold=90):
     # filter out sequences with primers at a wrong position
     substrings = [ref[i:i + PRIMER_LENGTH] for i in range(len(ref) - PRIMER_LENGTH + 1)]
