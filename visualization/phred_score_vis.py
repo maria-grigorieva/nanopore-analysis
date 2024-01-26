@@ -1,21 +1,15 @@
-import pylab as plt
-import numpy as np
-import pandas as pd
-import matplotlib.patches as patches
 from Bio import SeqIO
 import sys
 import argparse
 from pathlib import Path
+from PIL import Image, ImageDraw
 
 def main(args):
     parser = argparse.ArgumentParser(description='Visualization of phred score for fastq files')
     args_info = [
         ['-i', '--input', str, 'Path to the fastq input file', 'input_file'],
-        ['-l', '--limit', int, 'Limit number of sequences', 'limit', 10000],
-        ['-sl', '--seq_length', int, 'Sequence length', 100],
-        ['-bp', '--boxplots', bool, 'Draw boxplots', False],
-        ['-b', '--bins', int, 'Number of bins at X axis', 20],
-        ['-s', '--save', bool, 'Save to file', False]
+        ['-l', '--limit', int, 'Limit number of sequences', 'limit', 1000],
+        ['-sl', '--seq_length', int, 'Sequence length', None]
     ]
 
     for arg_info in args_info:
@@ -26,86 +20,52 @@ def main(args):
     filename = args.input
     limit = args.limit
     seq_len = args.seq_length
-    boxplots = args.boxplots
-    bins = args.bins
-    save = args.save
 
-    plot_fastq_qualities(filename,
-                         None,
-                         limit,
-                         seq_len,
-                         boxplots,
-                         bins,
-                         save)
+    create_image_with_colored_sequence(filename, limit, seq_len=seq_len)
 
 
-def plot_fastq_qualities(filename,
-                         ax=None,
-                         limit=20000,
-                         seq_len=100,
-                         boxplots=False,
-                         bins=20,
-                         save=False):
+def create_image_with_colored_sequence(filename, limit=200, seq_len=None):
+    records = list(SeqIO.parse(filename, "fastq"))[:limit]
+    width = 20  # Width of each character box
+    height = 20  # Height of each character box
+    padding = 5  # Padding between character boxes
+    max_score = 40  # Maximum score
 
-    fastq_parser = SeqIO.parse(filename, "fastq")
+    # Calculate the total width and height of the image
+    total_width = limit * (width + padding)
+    total_height = height * len(records)
 
-    # n_seq = len([str(rec.seq) for rec in fastq_parser])
-    # print(n_seq)
-    res=[]
-    c=0
-    finished = False
+    image = Image.new("RGB", (total_width, total_height), "white")
+    draw = ImageDraw.Draw(image)
 
-    while not finished:
-        try:
-            for record in fastq_parser:
-                if boxplots:
-                    if len(record.letter_annotations["phred_quality"]) >= seq_len:
-                        score=record.letter_annotations["phred_quality"][:seq_len-1]
-                        res.append(score)
-                else:
-                    score = record.letter_annotations["phred_quality"][:seq_len - 1]
-                    res.append(score)
-            c += 1
-            if c > limit:
-                break
-            finished = True
-        except ValueError as e:
-            print(e)
-    print(f'Selected sequences {len(res)}')
-    df = pd.DataFrame(res)
-    l = len(df.T)+1
+    y = 0
 
-    if ax==None:
-        f,ax=plt.subplots(figsize=(12,5))
-    rect = patches.Rectangle((0,0),l,20,linewidth=0,facecolor='r',alpha=.4)
-    ax.add_patch(rect)
-    rect = patches.Rectangle((0,20),l,8,linewidth=0,facecolor='yellow',alpha=.4)
-    ax.add_patch(rect)
-    rect = patches.Rectangle((0,28),l,12,linewidth=0,facecolor='g',alpha=.4)
-    ax.add_patch(rect)
-    df.mean().plot(ax=ax,c='black')
-    if boxplots:
-        boxprops = dict(linestyle='-', linewidth=1, color='black')
-        df.plot(kind='box', ax=ax, grid=False, showfliers=False,
-                color=dict(boxes='black',whiskers='black')  )
-    N = bins  # Maximum number of values displayed on the x-axis
+    for record in records:
+        sequence = str(record.seq) if seq_len is None else str(record.seq)[:seq_len]
+        scores = record.letter_annotations["phred_quality"] if seq_len is None else \
+                 record.letter_annotations["phred_quality"][:seq_len]
 
-    # Calculate the step size based on the length of the axis and the maximum number of values
-    step_size = max(int(l / N), 1)
+        x = 0
 
-    # Set the x-ticks and labels with the calculated step size
-    ax.set_xticks(np.arange(0, l, step_size))
-    ax.set_xticklabels(np.arange(0, l, step_size))
+        for i, score in enumerate(scores):
+            character = sequence[i]
 
-    ax.set_xlabel('position(bp)')
-    ax.set_xlim((0,l))
-    ax.set_ylim((0,40))
-    ax.set_title('per base sequence quality')
-    if not save:
-        plt.show()
-    else:
-        plt.savefig(f'{Path(filename).stem}_phred_score.png')
-    return
+            # Calculate the color based on the score
+            normalized_score = score / max_score  # Normalize the score between 0 and 1
+            red = int(255 * (1 - normalized_score))
+            green = int(255 * normalized_score)
+            color = (red, green, 0)
+
+            # Draw the character box with the corresponding color
+            draw.rectangle([x, y, x + width, y + height], fill=color)
+            draw.text((x+8, y), character, fill="black")
+
+            x += width + padding
+
+        y += height
+
+    image.save(f'{Path(filename).stem}_phred_score_detailed.png')
+
 
 if __name__ == "__main__":
     main(sys.argv[1:])
