@@ -1,6 +1,7 @@
 import pprint
 import pandas as pd
 from Bio import SeqIO
+from Bio.Seq import Seq
 import matplotlib.pyplot as plt
 import argparse
 import plotly.graph_objects as go
@@ -8,6 +9,8 @@ from collections import Counter
 from Levenshtein import distance as lev
 from difflib import SequenceMatcher
 import re
+from fuzzywuzzy import fuzz
+from functools import reduce
 
 
 parser = argparse.ArgumentParser(description='Statistics of fastq files')
@@ -31,11 +34,21 @@ kmer_length = args.kmer_length
 save = args.save
 mode = args.mode
 n_seq = args.n_seq
-pl = args.left_primer
-pr = args.right_primer
+PL = args.left_primer
+PR = args.right_primer
+
+# Set all variations of primers
+# R_PL, R_PR = PL[::-1], PR[::-1]
+# C_PL, C_PR = str(Seq(PL).complement()), str(Seq(PR).complement())
+# RC_PL, RC_PR = C_PL[::-1], C_PR[::-1]
 
 def main():
     sequences = [str(rec.seq) for rec in SeqIO.parse(filename, "fastq")]
+    print(len(sequences))
+    #filter out sequences with glued primers
+    # sequences = [s for s in sequences if not glued_primers(s, 9)]
+    # print(len(sequences))
+
     df = count_kmers(sequences, kmer_length)
     if save:
         save_to_file(df)
@@ -77,30 +90,51 @@ def main():
         print(filtered_dict)
 
         sorted_items = sorted(filtered_dict.items(), key=lambda x: x[1][0])
-        aligned_string = sorted_items[0][0]  # Set the initial aligned string as the first key
-        for i in range(1, len(sorted_items)):
-            key, values = sorted_items[i]
-            prev_key, prev_values = sorted_items[i - 1]
-            if prev_key[1:] == key[:-1]:
-                shift = values[0] - prev_values[0]
-                aligned_string += key[-shift:]
+        sequences = [i[0] for i in sorted_items]
+        print(merge_strings(sequences))
 
-        print("Aligned string:")
-        print(aligned_string)
 
+def merge_strings(strings):
+    merged_string = strings[0]  # Start with the first string in the array
+
+    for string in strings[1:]:
+        match = SequenceMatcher(None, string, merged_string).find_longest_match()
+        common = string[match.a:match.a + match.size]
+        if merged_string[-len(common):] == common:
+            residual = string[len(common):]
+            merged_string += residual
+
+    return merged_string
+
+def glued_primers(ref, length=6, threshold=90):
+    substrings = [ref[i:i + length*2] for i in range(len(ref) - length*2 + 1)]
+    for s in substrings:
+        if (fuzz.ratio(s, RC_PR[-length:] + PR[:length]) >= threshold or \
+            fuzz.ratio(s, RC_PL[-length:] + PR[:length]) >= threshold or \
+            fuzz.ratio(s, RC_PR[-length:] + PL[:length]) >= threshold):
+            return True
+    return False
 
 def save_to_file(df):
     output_filename = f'{kmer_length}_mer_freq.xlsx'
     df.to_excel(output_filename)
 
-def check_for_repeatable(string):
-    unigram_pattern = r'(.){4,}'  # Matches any character repeated 5 or more times consecutively
-    bigram_pattern = r'(..){4,}'  # Matches repeatable bigrams
-    # trigram_pattern = r'(...){4,}'
+def find_repeatable_substrings(string):
+    repeatable_substrings = set()
 
-    return (re.search(unigram_pattern, string) is None) and\
-           (re.search(bigram_pattern, string) is None)
-           # (re.search(trigram_pattern, string) is None)
+    # Find repeatable characters
+    repeatable_characters = re.findall(r'((\w)\2{6,})', string)
+    repeatable_substrings.update([substring[0] for substring in repeatable_characters])
+
+    # Find repeatable bigrams
+    repeatable_bigrams = re.findall(r'((\w{2})\2{4,})', string)
+    repeatable_substrings.update([substring[0] for substring in repeatable_bigrams])
+
+    # Find repeatable trigrams
+    repeatable_trigrams = re.findall(r'((\w{3})\2{3,})', string)
+    repeatable_substrings.update([substring[0] for substring in repeatable_trigrams])
+
+    return repeatable_substrings
 
 
 def count_kmers(sequences, kmer_length=30, step=10, threshold=5):
@@ -109,14 +143,18 @@ def count_kmers(sequences, kmer_length=30, step=10, threshold=5):
     for sequence in sequences:
         for i in range(0, len(sequence) - kmer_length + 1, step):
             kmer = sequence[i:i + kmer_length]
-            if check_for_repeatable(kmer):
-                ratio_pl = SequenceMatcher(None, kmer, pl).ratio()
-                ratio_pr = SequenceMatcher(None, kmer, pr).ratio()
-                if ratio_pl <= 0.4:
-                    if ratio_pr <= 4:
-                        if kmer not in kmer_frequencies:
-                            kmer_frequencies[kmer] = 0
-                        kmer_frequencies[kmer] += 1
+            # remove all incorrect sequences (i.e. AAAAAAA, ACACACACAC, GGGGGGGGG, ...)
+            if any([i in kmer for i in find_repeatable_substrings(kmer)]):
+                continue
+                ## remove all subsequences similar to primers
+                # ratio_pl = SequenceMatcher(None, kmer, PL).ratio()
+                # ratio_pr = SequenceMatcher(None, kmer, PR).ratio()
+                # if ratio_pl <= 0.3:
+                #     if ratio_pr <= 0.3:
+            else:
+                if kmer not in kmer_frequencies:
+                    kmer_frequencies[kmer] = 0
+            kmer_frequencies[kmer] += 1
     df = pd.DataFrame(kmer_frequencies.items(), columns=['kmer', 'frequency'])
     df = df.sort_values('frequency', ascending=False)
     return df[df['frequency'] > threshold]
