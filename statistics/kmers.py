@@ -6,22 +6,21 @@ import matplotlib.pyplot as plt
 import argparse
 import plotly.graph_objects as go
 from collections import Counter
-from Levenshtein import distance as lev
 from difflib import SequenceMatcher
 import re
 from fuzzywuzzy import fuzz
-from functools import reduce
 
 
 parser = argparse.ArgumentParser(description='Statistics of fastq files')
 args_info = [
     ['-i', '--input', str, 'Path to the fastq input file', 'input_file'],
     ['-k', '--kmer_length', int, 'Length of kmers', 'kmer_length', 30],
-    ['-m', '--mode', str, 'Mode', 'max'],
+    ['-m', '--mode', str, 'Mode', 'search'],
     ['-n', '--n_seq', int, 'Number of subsequences', 10],
     ['-s', '--save', bool, 'Save to file', False],
     ['-pl', '--left_primer', str, 'Left Primer', None],
-    ['-pr', '--right_primer', str, 'Right Primer', None]
+    ['-pr', '--right_primer', str, 'Right Primer', None],
+    ['-seq', '--sequence_to_check', str, 'Sequence for checking', None]
 ]
 
 for arg_info in args_info:
@@ -36,63 +35,66 @@ mode = args.mode
 n_seq = args.n_seq
 PL = args.left_primer
 PR = args.right_primer
+SEQ = args.sequence_to_check
+
+R_PL = R_PR = C_PL = C_PR = RC_PL = RC_PR = None
 
 # Set all variations of primers
-# R_PL, R_PR = PL[::-1], PR[::-1]
-# C_PL, C_PR = str(Seq(PL).complement()), str(Seq(PR).complement())
-# RC_PL, RC_PR = C_PL[::-1], C_PR[::-1]
+if PL is not None and PR is not None:
+    R_PL, R_PR = PL[::-1], PR[::-1]
+    C_PL, C_PR = str(Seq(PL).complement()), str(Seq(PR).complement())
+    RC_PL, RC_PR = C_PL[::-1], C_PR[::-1]
 
 def main():
+
     sequences = [str(rec.seq) for rec in SeqIO.parse(filename, "fastq")]
     print(len(sequences))
-    #filter out sequences with glued primers
+    # filter out sequences with glued primers
     # sequences = [s for s in sequences if not glued_primers(s, 9)]
     # print(len(sequences))
+    search_candidates(sequences, mode)
 
-    df = count_kmers(sequences, kmer_length)
-    if save:
-        save_to_file(df)
-    else:
-        pprint.pprint(df)
+def search_candidates(sequences, mode='search'):
 
-    if mode == 'max':
-        # get the most frequent sequence
-        reference = df['kmer'].iloc[0]
-        occurences = get_all_occurrences(reference, sequences)
-        value_counts = count_values(occurences)
-        pprint.pprint(value_counts)
-        draw_histogram_sequence(occurences, reference)
-    elif mode == 'top':
-        # get topN
-        references = df['kmer'].iloc[0:n_seq]
-        occurences = [{'ref': r, 'occurences': get_all_occurrences(r, sequences)} for r in references]
-        peaks = {}
-        diffs = []
-        for i in occurences:
-            ref = i['ref']
-            extremums = []
-            get_extremums_by_occurrences(i['occurences'], extremums)
-            peaks[ref] = extremums
-            differences = [extremums[i + 1] - extremums[i] for i in range(len(extremums) - 1)]
-            diffs.extend(differences)
+    if mode == 'search':
 
-        draw_histograms(occurences, 'plotly')
-        pprint.pprint(peaks)
-        counter = Counter(diffs)
-        max_occurrence = max(counter, key=counter.get)
-        print(f'Most frequent distance between occurences is: {max_occurrence}')
-        # Filtering and sorting
-        filtered_items = [item for item in peaks.items() if abs(item[1][0] - item[1][1]) <= max_occurrence]
-        sorted_items = sorted(filtered_items, key=lambda x: x[1][0])
-        # Creating a new dictionary with the filtered and sorted items
-        filtered_dict = {item[0]: item[1] for item in sorted_items}
-        print("Filtered and sorted dictionary:")
-        print(filtered_dict)
+        df = count_kmers(sequences, kmer_length)
+        save_to_file(df) if save else pprint.pprint(df)
 
-        sorted_items = sorted(filtered_dict.items(), key=lambda x: x[1][0])
-        sequences = [i[0] for i in sorted_items]
-        print(merge_strings(sequences))
+    elif mode == 'check' and SEQ is not None:
+        df = count_sequence_frequency(sequences, SEQ)
 
+    references = df['kmer'].iloc[0:n_seq]
+    occurences = [{'ref': r, 'occurences': get_all_occurrences(r, sequences)} for r in references]
+
+    peaks, diffs = {}, []
+    for i in occurences:
+        ref = i['ref']
+        extremums = []
+        get_extremums_by_occurrences(i['occurences'], extremums)
+        peaks[ref] = extremums
+        differences = [extremums[i + 1] - extremums[i] for i in range(len(extremums) - 1)]
+        diffs.extend(differences)
+
+    draw_histograms(occurences, 'plotly')
+    pprint.pprint(peaks)
+
+    counter = Counter(diffs)
+    max_occurrence = max(counter, key=counter.get)
+    print(f'Most frequent distance between occurences is: {max_occurrence}')
+
+    # Filtering and sorting
+    filtered_items = [item for item in peaks.items() if abs(item[1][0] - item[1][1]) <= max_occurrence]
+    sorted_items = sorted(filtered_items, key=lambda x: x[1][0])
+
+    # Creating a new dictionary with the filtered and sorted items
+    filtered_dict = {item[0]: item[1] for item in sorted_items}
+    print("Filtered and sorted dictionary:")
+    print(filtered_dict)
+
+    sorted_items = sorted(filtered_dict.items(), key=lambda x: x[1][0])
+    sequences = [i[0] for i in sorted_items]
+    print(merge_strings(sequences))
 
 def merge_strings(strings):
     merged_string = strings[0]  # Start with the first string in the array
@@ -121,15 +123,12 @@ def save_to_file(df):
 
 def find_repeatable_substrings(string):
     repeatable_substrings = set()
-
     # Find repeatable characters
     repeatable_characters = re.findall(r'((\w)\2{6,})', string)
     repeatable_substrings.update([substring[0] for substring in repeatable_characters])
-
     # Find repeatable bigrams
     repeatable_bigrams = re.findall(r'((\w{2})\2{4,})', string)
     repeatable_substrings.update([substring[0] for substring in repeatable_bigrams])
-
     # Find repeatable trigrams
     repeatable_trigrams = re.findall(r'((\w{3})\2{3,})', string)
     repeatable_substrings.update([substring[0] for substring in repeatable_trigrams])
@@ -146,7 +145,7 @@ def count_kmers(sequences, kmer_length=30, step=10, threshold=5):
             # remove all incorrect sequences (i.e. AAAAAAA, ACACACACAC, GGGGGGGGG, ...)
             if any([i in kmer for i in find_repeatable_substrings(kmer)]):
                 continue
-                ## remove all subsequences similar to primers
+                # remove all subsequences similar to primers
                 # ratio_pl = SequenceMatcher(None, kmer, PL).ratio()
                 # ratio_pr = SequenceMatcher(None, kmer, PR).ratio()
                 # if ratio_pl <= 0.3:
@@ -158,6 +157,14 @@ def count_kmers(sequences, kmer_length=30, step=10, threshold=5):
     df = pd.DataFrame(kmer_frequencies.items(), columns=['kmer', 'frequency'])
     df = df.sort_values('frequency', ascending=False)
     return df[df['frequency'] > threshold]
+
+def count_sequence_frequency(sequences, seq):
+    count = 0
+    for item in sequences:
+        count += item.count(seq)
+    index = pd.Index(range(len(seq)))  # Replace `seq` with the appropriate scalar value
+    df = pd.DataFrame({'kmer': seq, 'frequency': count}, index=index)
+    return df
 
 
 def get_all_occurrences(reference, all_sequences):
@@ -193,15 +200,31 @@ def get_extremums_by_occurrences(arr, extremums, eps=10, chunks=2):
         get_extremums_by_occurrences(arr, extremums, eps, chunks)
 
 
-def draw_histogram_sequence(data, reference, bins=50):
-    plt.hist(data, bins=bins, edgecolor='black')
-    plt.xlabel('Position')
-    plt.ylabel('Frequency')
-    plt.title(f'Distribution of start positions for {reference}')
-    plt.show()
-    if save:
-        output_filename = f'{reference}_mer_freq.png'
-        plt.savefig(output_filename)
+# def draw_histogram_sequence(data, reference, bins=50):
+#     plt.hist(data, bins=bins, edgecolor='black')
+#     plt.xlabel('Position')
+#     plt.ylabel('Frequency')
+#     plt.title(f'Distribution of start positions for {reference}')
+#     plt.show()
+#     if save:
+#         output_filename = f'{reference}_mer_freq.png'
+#         plt.savefig(output_filename)
+#
+
+def draw_histogram_sequence(data, reference, bins=50, save=False):
+    fig = go.Figure()
+    fig.add_trace(go.Histogram(x=data, nbinsx=bins))
+
+    fig.update_layout(
+        xaxis_title='Position',
+        yaxis_title='Frequency',
+        title=f'Distribution of start positions for {reference}'
+    )
+
+    fig.show()
+    # if save:
+    #     output_filename = f'{reference}_mer_freq.png'
+    #     pio.write_image(fig, output_filename)
 
 def draw_histograms(arrays, type='matplotlib'):
 
