@@ -4,17 +4,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 from Bio import SeqIO
 from Bio.Seq import Seq
-import glob
 import re
 import argparse
 import os
 from fuzzywuzzy import fuzz
-import itertools
-from pathlib import Path
-from difflib import SequenceMatcher
 import tqdm
 from PIL import Image, ImageDraw
-import math
 
 
 # Define the argument parser
@@ -72,12 +67,13 @@ R_PL, R_PR = PL[::-1], PR[::-1]
 C_PL, C_PR = str(Seq(PL).complement()), str(Seq(PR).complement())
 RC_PL, RC_PR = C_PL[::-1], C_PR[::-1]
 
-# logging.basicConfig(filename=LOG_FILE, filemode='w', format='%(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, filename=LOG_FILE, filemode="w",
+                    format="%(asctime)s %(levelname)s %(message)s")
 
 def main():
 
     seq_list = get_sequences(clean=CLEAN)
-    print(f'{len(seq_list)} sequences have been read!')
+    logging.info(f'{len(seq_list)} sequences have been read!')
 
     # todo: remove whole sequences with glued primers?
     # seq_list = [s for s in seq_list if not glued_primers(s['sequence'], 9)]
@@ -95,13 +91,13 @@ def main():
     probabilities = []
     weights_list = []
 
-    print(f'''Choosing the sequences that include the initial reference {INIT_REFERENCE['seq']} 
+    logging.info(f'''Choosing the sequences that include the initial reference {INIT_REFERENCE['seq']} 
             at {INIT_REFERENCE['start_pos']} position...''')
 
-    print(f'''{len(INIT_REFERENCE['sequences'])} have been selected with 
+    logging.info(f'''{len(INIT_REFERENCE['sequences'])} have been selected with 
                 {INIT_REFERENCE['seq']} at {INIT_REFERENCE['start_pos']}''')
 
-    print(f'''Calculating probabilities of the occurence of letters at each position...''')
+    logging.info(f'''Calculating probabilities of the occurence of letters at each position...''')
     freq = calculate_probabilities(INIT_REFERENCE['sequences'])
     probabilities.append(freq)
 
@@ -120,7 +116,7 @@ def main():
 
     reference = INIT_REFERENCE
 
-    print('Moving slicing window...')
+    logging.info('Moving slicing window...')
     move_slicing_window(seq_list,
                         reference,
                         INIT_REFERENCE,
@@ -135,7 +131,7 @@ def main():
     # Create an empty dictionary to store the merged data
     merged_data = {}
 
-    print('Merging data from all letters probabilities cases...')
+    logging.info('Merging data from all letters probabilities cases...')
     for df in probabilities:
         for row in ['A', 'C', 'G', 'T']:
             merged_data[row] = df.loc[row] if row not in merged_data else \
@@ -150,7 +146,7 @@ def main():
     if SAVE_FILES:
         output_writer = pd.ExcelWriter(f'{OUTPUT_DIR}/{fname}.xlsx')
 
-    print(f'Calculating statistics...')
+    logging.info(f'Calculating statistics...')
     final_composition_median, final_composition_low, final_composition_high = {}, {}, {}
 
     for row in ['A', 'C', 'G', 'T']:
@@ -218,29 +214,30 @@ def weighted_statistics(df_A, df_B, threshold=0.4):
 
 def print_info(seq_list, init_ref):
     # Print out the values of all the arguments
-    print(f'Number of sequences in {FILE_PATH}: {len(seq_list)}')
-    print(f"Length of an aptamer: {APTAMER_LENGTH}")
-    print(f"Length of a primer: {PRIMER_LENGTH}")
-    print(f"Left Primer: {PL}")
-    print(f"Right Primer: {PR}")
-    print(f"Input file: {FILE_PATH}")
-    print(f"Directory for the output: {OUTPUT_DIR}")
-    print(f"Initial reference length: {REFERENCE_LENGTH}")
-    print(f"Initial reference sequence: {init_ref['seq']}")
-    print(f"Start position of the initial reference sequence: {init_ref['start_pos']}")
+    logging.info(f'Number of sequences in {FILE_PATH}: {len(seq_list)}')
+    logging.info(f"Length of an aptamer: {APTAMER_LENGTH}")
+    logging.info(f"Length of a primer: {PRIMER_LENGTH}")
+    logging.info(f"Left Primer: {PL}")
+    logging.info(f"Right Primer: {PR}")
+    logging.info(f"Input file: {FILE_PATH}")
+    logging.info(f"Directory for the output: {OUTPUT_DIR}")
+    logging.info(f"Initial reference length: {REFERENCE_LENGTH}")
+    logging.info(f"Initial reference sequence: {init_ref['seq']}")
+    logging.info(f"Start position of the initial reference sequence: {init_ref['start_pos']}")
 
 def infer_sequence(probability, df, init_ref):
     result = highest_probability_sequence(df.copy())
     plot_probabilities(df, {'seq': result, 'start_pos': 0}, probability)
-    print_result(result, init_ref)
+    print_result(result, init_ref, probability)
 
-def print_result(result, ref):
+def print_result(result, ref, probability):
     primer = result[:APTAMER_LENGTH] if PRIMER_TYPE == 'right' else result[:PRIMER_LENGTH]
     aptamer = result[APTAMER_LENGTH:APTAMER_LENGTH + PRIMER_LENGTH] \
         if PRIMER_TYPE == 'right' else result[PRIMER_LENGTH:PRIMER_LENGTH + APTAMER_LENGTH]
 
-    print(f"Found candidate with reference {ref['seq']} at position {ref['start_pos']}:")
-    print(f"{primer}---{aptamer}")
+    logging.info(f"Found candidate with reference {ref['seq']} at position {ref['start_pos']}:")
+    logging.info(f'Probability: {probability}')
+    logging.info(f"{primer}---{aptamer}")
 
 def get_sequences(clean=True, mode='complete'):
     """
@@ -248,8 +245,8 @@ def get_sequences(clean=True, mode='complete'):
     """
     results = []
     records = list(SeqIO.parse(FILE_PATH, "fastq"))
-    print(f'Initial number of records in {FILE_PATH}: {len(records)}')
-    print('Reading file...')
+    logging.info(f'Initial number of records in {FILE_PATH}: {len(records)}')
+    logging.info('Reading file...')
     with open(f'{OUTPUT_DIR}/internal.fastq', 'w') as file:
         for rec in tqdm.tqdm(records, total=len(list(records)), leave=False, desc=FILE_PATH):
             sequence = str(rec.seq)
@@ -263,9 +260,9 @@ def get_sequences(clean=True, mode='complete'):
             results.append({'sequence': sequence,
                             'score': score})
             SeqIO.write(rec, file, 'fastq')
-    print(f'{len(results)} sequences have been read!')
+    logging.info(f'{len(results)} sequences have been read!')
     create_image_with_colored_sequence(results[0:1000], f'{OUTPUT_DIR}/internal.png')
-    print(f'Internal fastq file has been written.')
+    logging.info(f'Internal fastq file has been written.')
     return results
 
 def create_image_with_colored_sequence(records, output_file, limit=200):
@@ -273,10 +270,7 @@ def create_image_with_colored_sequence(records, output_file, limit=200):
     height = 20  # Height of each character box
     padding = 5  # Padding between character boxes
     max_score = 40  # Maximum score
-    colors = [(255, 0, 0), (255, 165, 0), (0, 128, 0)]  # Red, Orange, Green
 
-    # Calculate the total width and height of the image
-    #total_width = max(len(record['sequence']) for record in records) * (width + padding)
     total_width = limit * (width + padding)
     total_height = height * len(records)
 
@@ -504,12 +498,12 @@ def update_reference(df, seq_list, reference, direction = -1):
             new_ref['scores'] = len(sequences), sequences, scores
             ref_name = new_ref['seq']
             n_seqs = new_ref['n_seqs']
-            print(f'Check reference {ref_name}: number of sequences is {n_seqs}')
+            logging.info(f'Check reference {ref_name}: number of sequences is {n_seqs}')
             refs.append(new_ref)
         except Exception as e:
             continue
     res = max(refs, key=lambda x: x['n_seqs'])
-    print(
+    logging.info(
         f'''{len(res['sequences'])} have been selected with {res['seq']} at {res['start_pos']}''')
     return res
 
@@ -548,20 +542,26 @@ def move_slicing_window(seq_list, reference, init_ref, freq, probabilities, weig
 
         plot_probabilities(freq, reference)
 
-    print('Moving left...')
+    logging.info('Moving left...')
+    pbar = tqdm.tqdm(total=(reference['start_pos'] - left_limit))
     while reference['start_pos'] > left_limit:
         update_window(direction=-1)
+        pbar.update(1)  # Increment the progress bar by 1
+    pbar.close()  # Close the progress bar once the loop is finished
 
     reference = init_ref
     freq = calculate_probabilities(reference['sequences'])
 
-    print('The reference sequence has been reset to the initial value')
+    logging.info('The reference sequence has been reset to the initial value')
 
-    print('Moving right...')
+    logging.info('Moving right...')
+    pbar = tqdm.tqdm(total=(left_limit-reference['start_pos']))
     while reference['start_pos'] < right_limit:
         update_window(direction=1)
+        pbar.update(1)  # Increment the progress bar by 1
+    pbar.close()  # Close the progress bar once the loop is finished
 
-    print('Moving slicing window has been finished!')
+    logging.info('Moving slicing window has been finished!')
 
 
 def highest_probability_sequence(df):
