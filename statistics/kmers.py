@@ -159,13 +159,8 @@ def count_kmers(sequences, kmer_length=30, step=10, threshold=5):
     return df[df['frequency'] > threshold]
 
 def count_sequence_frequency(sequences, seq):
-    count = 0
-    for item in sequences:
-        count += item.count(seq)
-    index = pd.Index(range(len(seq)))  # Replace `seq` with the appropriate scalar value
-    df = pd.DataFrame({'kmer': seq, 'frequency': count}, index=index)
-    return df
-
+    return pd.DataFrame([{'kmer': seq,
+                        'frequency': sum(seq in item for item in sequences)}])
 
 def get_all_occurrences(reference, all_sequences):
     positions = []
