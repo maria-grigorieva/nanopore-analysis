@@ -12,6 +12,7 @@ import tqdm
 from PIL import Image, ImageDraw
 from itertools import combinations
 import uuid
+from itertools import product
 
 
 
@@ -82,6 +83,9 @@ PRIMERS = [{"primer_type": "PR", "primer_value": PR, "number_of_occurences": 0},
 logging.basicConfig(level=logging.INFO, filename=LOG_FILE, filemode="w",
                     format="%(asctime)s %(levelname)s %(message)s")
 
+APTAMERS = []
+CYCLES = 0
+
 def main():
 
     seq_list = get_sequences(clean=CLEAN)
@@ -92,47 +96,65 @@ def main():
     # seq_list = [s for s in seq_list if not glued_primers(s['sequence'], 9)]
     # print(len(seq_list))
 
-    INIT_REFERENCE = {'seq': args.ref,
-                      'complement': str(Seq(PR).complement()[::-1][0:REFERENCE_LENGTH]),
-                      'start_pos': args.pos}
+    INIT_REFERENCE = initialize(seq_list)
 
-    INIT_REFERENCE['sequences'],\
-    INIT_REFERENCE['scores'] = select_ref_sequences(seq_list, INIT_REFERENCE)
+    APTAMERS.append(searching(INIT_REFERENCE, seq_list, APTAMERS))
 
-    print_info(seq_list, INIT_REFERENCE)
 
+def initialize(seq_list):
+    ref = {'seq': args.ref,
+          'complement': str(Seq(PR).complement()[::-1][0:REFERENCE_LENGTH]),
+          'start_pos': args.pos}
+
+    ref['sequences'], \
+        ref['scores'] = select_ref_sequences(seq_list, ref)
+
+    print_info(seq_list, ref)
+    return ref
+
+def merging_probabilities(probabilities):
+    # Create an empty dictionary to store the merged data
+    merged_data = {}
+    logging.info('Merging data from all letters probabilities cases...')
+    for df in probabilities:
+        for row in ['A', 'C', 'G', 'T']:
+            merged_data[row] = df.loc[row] if row not in merged_data else \
+                pd.concat([merged_data[row], df.loc[row]], axis=1)
+    return merged_data
+
+def searching(ref, seq_list, aptamers):
     probabilities = []
     weights_list = []
 
-    logging.info(f'''Choosing the sequences that include the initial reference {INIT_REFERENCE['seq']} 
-            at {INIT_REFERENCE['start_pos']} position...''')
+    logging.info(f'''Choosing the sequences that include the initial reference {ref['seq']} 
+            at {ref['start_pos']} position...''')
 
-    logging.info(f'''{len(INIT_REFERENCE['sequences'])} have been selected with 
-                {INIT_REFERENCE['seq']} at {INIT_REFERENCE['start_pos']}''')
+    logging.info(f'''{len(ref['sequences'])} have been selected with 
+                {ref['seq']} at {ref['start_pos']}''')
 
     logging.info(f'''Calculating probabilities of the occurence of letters at each position...''')
-    freq = calculate_probabilities(INIT_REFERENCE['sequences'])
+    freq = calculate_probabilities(ref['sequences'])
     probabilities.append(freq)
 
-    weights = calculate_weights(INIT_REFERENCE['scores'])
+    weights = calculate_weights(ref['scores'])
     weights_list.append(weights)
 
-    fname = f'''steps_{INIT_REFERENCE['seq']}'''
+    fname = f'''steps_{ref['seq']}'''
 
     if SAVE_FILES:
         steps_writer = pd.ExcelWriter(f'{OUTPUT_DIR}/{fname}.xlsx')
-        write_steps_excel(freq, INIT_REFERENCE, steps_writer)
+        write_steps_excel(freq, ref, steps_writer)
     else:
         steps_writer = None
 
-    plot_probabilities(freq, INIT_REFERENCE)
+    plot_probabilities(freq, ref)
 
-    reference = INIT_REFERENCE
+    reference = ref
 
     logging.info('Moving slicing window...')
     move_slicing_window(seq_list,
                         reference,
-                        INIT_REFERENCE,
+                        ref,
                         freq,
                         probabilities,
                         weights_list,
@@ -142,24 +164,23 @@ def main():
         steps_writer.close()
 
     # Create an empty dictionary to store the merged data
-    merged_data = {}
-
-    logging.info('Merging data from all letters probabilities cases...')
-    for df in probabilities:
-        for row in ['A', 'C', 'G', 'T']:
-            merged_data[row] = df.loc[row] if row not in merged_data else \
-                pd.concat([merged_data[row], df.loc[row]], axis=1)
-
+    merged_data = merging_probabilities(probabilities)
     # Create an empty dict to store the merged weights data
     weights_df = pd.concat(weights_list)
     #weights_df = scale_dataframe(weights_df)
     weights_df.reset_index(drop=True, inplace=True)
 
-    fname = f'''output_{INIT_REFERENCE['seq']}'''
+    logging.info(f'Calculating statistics...')
+    result = calculate_statistics(merged_data, ref, weights_df)
+
+    aptamers.append(result)
+
+def calculate_statistics(merged_data, ref, weights_df):
+
+    fname = f'''output_{ref['seq']}'''
     if SAVE_FILES:
         output_writer = pd.ExcelWriter(f'{OUTPUT_DIR}/{fname}.xlsx')
 
-    logging.info(f'Calculating statistics...')
     final_composition_median, final_composition_low, final_composition_high = {}, {}, {}
 
     for row in ['A', 'C', 'G', 'T']:
@@ -170,7 +191,7 @@ def main():
         if SAVE_FILES:
             transposed_data.to_excel(output_writer, sheet_name=f"{row}", index=True, header=True)
 
-        #stats = weighted_statistics(transposed_data, weights_df) if PHRED_SCORES else transposed_data.describe()
+        # stats = weighted_statistics(transposed_data, weights_df) if PHRED_SCORES else transposed_data.describe()
         stats = transposed_data.describe()
 
         if SAVE_FILES:
@@ -195,9 +216,10 @@ def main():
 
         output_writer.close()
 
-    infer_sequence('0.25', final_composition_low_df, INIT_REFERENCE)
-    infer_sequence('median', final_composition_median_df, INIT_REFERENCE)
-    infer_sequence('0.75', final_composition_high_df, INIT_REFERENCE)
+    result_25 = infer_sequence('0.25', final_composition_low_df, ref)
+    result_median = infer_sequence('median', final_composition_median_df, ref)
+    result_75 = infer_sequence('0.75', final_composition_high_df, ref)
+    return result_median
 
 def weighted_statistics(df_A, df_B, threshold=0.4):
     statistics = {
@@ -248,6 +270,7 @@ def infer_sequence(probability, df, init_ref):
     result = highest_probability_sequence(df.copy())
     plot_probabilities(df, {'seq': result, 'start_pos': 0}, probability)
     print_result(result, init_ref, probability)
+    return result
 
 def print_result(result, ref, probability):
     primer = result[:APTAMER_LENGTH] if PRIMER_TYPE == 'right' else result[:PRIMER_LENGTH]
@@ -537,6 +560,15 @@ def calculate_probabilities(sequences):
     return pd.DataFrame({letter: np.sum(sequences == letter, axis=0) / sequences.shape[0]
                          for letter in ['A', 'C', 'G', 'T']}).T
 
+def get_combinations(length):
+    letters = ['A', 'C', 'G', 'T']
+    combinations = []
+
+    for repeat in range(1, length+1):
+        for combo in product(letters, repeat=repeat):
+            if len(combo)==length:
+                combinations.append(''.join(combo))
+    return combinations
 
 def update_reference(df, seq_list, reference, direction = -1):
     """
@@ -575,13 +607,17 @@ def update_reference(df, seq_list, reference, direction = -1):
     #
 
     refs = []
+    step = abs(direction)
+    # get letters combinations
+    # comb = list(combinations(['A','C','G','T'], step))
+    for letter in get_combinations(step):
     # for k, v in letters_probability.items():
-    for letter in ['A','C','G','T']:
-        new_ref = {'seq': letter + reference['seq'][:-1] if direction == -1 else reference['seq'][1:] + letter,
+    # for letter in ['A','C','G','T']:
+        new_ref = {'seq': letter + reference['seq'][:-step] if direction == -step else reference['seq'][step:] + letter,
                    'start_pos': new_start}
         ref_name = new_ref['seq']
-        complement = str(Seq(PR).complement()[::-1][0:REFERENCE_LENGTH])
-        new_ref['complement'] = letter + complement[:-1] if direction == -1 else complement[1:] + letter
+        complement = str(Seq(PR).complement()[::-step][0:REFERENCE_LENGTH])
+        new_ref['complement'] = letter + complement[:-step] if direction == -step else complement[step:] + letter
 
         try:
             sequences, scores = select_ref_sequences(seq_list, new_ref)
@@ -602,7 +638,7 @@ def update_reference(df, seq_list, reference, direction = -1):
             logging.info(f'{ref_name}: Number of sequences is {n_seqs}, correctness = {correctness}, hits = {hits}')
 
         except Exception as e:
-            logging.info(f'Checking sequences for the {ref_name} has not been done...')
+            # logging.info(f'Checking sequences for the {ref_name} has not been done...')
             continue
     #res = max(refs, key=lambda x: x['n_seqs'])
     # res = max(refs, key=lambda x: x['hits'])
@@ -635,7 +671,7 @@ def write_steps_excel(freq, reference, writer=None):
                                                    header=True)
 
 
-def move_slicing_window(seq_list, reference, init_ref, freq, probabilities, weights_list, writer):
+def move_slicing_window(seq_list, reference, init_ref, freq, probabilities, weights_list, writer, step=1):
     left_limit = PRIMER_LENGTH if PRIMER_TYPE == 'right' else 0
     right_limit = TOTAL_LENGTH - REFERENCE_LENGTH - 1 if PRIMER_TYPE == 'right' \
         else TOTAL_LENGTH - PRIMER_LENGTH - REFERENCE_LENGTH - 1
@@ -659,8 +695,8 @@ def move_slicing_window(seq_list, reference, init_ref, freq, probabilities, weig
 
     logging.info('Moving left...')
     pbar = tqdm.tqdm(total=(reference['start_pos'] - left_limit))
-    while reference['start_pos'] > left_limit:
-        update_window(direction=-1)
+    while reference['start_pos'] > left_limit + step:
+        update_window(direction=-step)
         pbar.update(1)  # Increment the progress bar by 1
     pbar.close()  # Close the progress bar once the loop is finished
 
@@ -671,8 +707,8 @@ def move_slicing_window(seq_list, reference, init_ref, freq, probabilities, weig
 
     logging.info('Moving right...')
     pbar = tqdm.tqdm(total=(left_limit-reference['start_pos']))
-    while reference['start_pos'] < right_limit:
-        update_window(direction=1)
+    while reference['start_pos'] < right_limit - step:
+        update_window(direction=step)
         pbar.update(1)  # Increment the progress bar by 1
     pbar.close()  # Close the progress bar once the loop is finished
 
