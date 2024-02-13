@@ -10,6 +10,9 @@ import os
 from fuzzywuzzy import fuzz
 import tqdm
 from PIL import Image, ImageDraw
+from itertools import combinations
+import uuid
+
 
 
 # Define the argument parser
@@ -67,6 +70,15 @@ R_PL, R_PR = PL[::-1], PR[::-1]
 C_PL, C_PR = str(Seq(PL).complement()), str(Seq(PR).complement())
 RC_PL, RC_PR = C_PL[::-1], C_PR[::-1]
 
+PRIMERS = [{"primer_type": "PR", "primer_value": PR, "number_of_occurences": 0},
+            {"primer_type": "PL", "primer_value": PL, "number_of_occurences": 0},
+            {"primer_type": "R_PL", "primer_value": R_PL, "number_of_occurences": 0},
+            {"primer_type": "R_PR", "primer_value": R_PR, "number_of_occurences": 0},
+            {"primer_type": "C_PL", "primer_value": C_PL, "number_of_occurences": 0},
+            {"primer_type": "C_PR", "primer_value": C_PR, "number_of_occurences": 0},
+            {"primer_type": "RC_PR", "primer_value": RC_PR, "number_of_occurences": 0},
+            {"primer_type": "RC_PL", "primer_value": RC_PL, "number_of_occurences": 0}]
+
 logging.basicConfig(level=logging.INFO, filename=LOG_FILE, filemode="w",
                     format="%(asctime)s %(levelname)s %(message)s")
 
@@ -74,6 +86,7 @@ def main():
 
     seq_list = get_sequences(clean=CLEAN)
     logging.info(f'{len(seq_list)} sequences have been read!')
+    # REFERENCE, REFERENCE_LENGTH, START_POS = search_best_primer(seq_list)
 
     # todo: remove whole sequences with glued primers?
     # seq_list = [s for s in seq_list if not glued_primers(s['sequence'], 9)]
@@ -139,7 +152,7 @@ def main():
 
     # Create an empty dict to store the merged weights data
     weights_df = pd.concat(weights_list)
-    weights_df = scale_dataframe(weights_df)
+    #weights_df = scale_dataframe(weights_df)
     weights_df.reset_index(drop=True, inplace=True)
 
     fname = f'''output_{INIT_REFERENCE['seq']}'''
@@ -224,6 +237,12 @@ def print_info(seq_list, init_ref):
     logging.info(f"Initial reference length: {REFERENCE_LENGTH}")
     logging.info(f"Initial reference sequence: {init_ref['seq']}")
     logging.info(f"Start position of the initial reference sequence: {init_ref['start_pos']}")
+    logging.info(f"Type of a primer for searching: {PRIMER_TYPE}")
+    logging.info(f"Fuzzy search: {FUZZY}")
+    logging.info(f"Take into account nucleotide phred scores: {PHRED_SCORES}")
+    logging.info(f"Phred scores cutoff: {PHRED_CUTOFF}")
+    logging.info(f"Complementary Right Primer: {C_PR}")
+    logging.info(f"Complementaty Left Primer: {C_PL}")
 
 def infer_sequence(probability, df, init_ref):
     result = highest_probability_sequence(df.copy())
@@ -239,6 +258,21 @@ def print_result(result, ref, probability):
     logging.info(f'Probability: {probability}')
     logging.info(f"{primer}---{aptamer}")
 
+
+def generate_fastq_file(data, output_filename):
+    records = []
+    for i, item in enumerate(data):
+        sequence = item['sequence']
+        score = item['score']
+        record_id = str(uuid.uuid4())
+        record = SeqIO.SeqRecord(Seq(sequence), id=record_id, name='', description='')
+        record.letter_annotations["phred_quality"] = score
+        records.append(record)
+
+    SeqIO.write(records, output_filename, "fastq")
+    return output_filename
+
+
 def get_sequences(clean=True, mode='complete'):
     """
     Merge sequences from a specified directory
@@ -247,23 +281,42 @@ def get_sequences(clean=True, mode='complete'):
     records = list(SeqIO.parse(FILE_PATH, "fastq"))
     logging.info(f'Initial number of records in {FILE_PATH}: {len(records)}')
     logging.info('Reading file...')
-    with open(f'{OUTPUT_DIR}/internal.fastq', 'w') as file:
-        for rec in tqdm.tqdm(records, total=len(list(records)), leave=False, desc=FILE_PATH):
-            sequence = str(rec.seq)
-            score = rec.letter_annotations["phred_quality"]
-            if clean:
-                if glued_primers(sequence, length=PRIMER_LENGTH) is not None:
-                    if mode == 'partial':
-                        sequence, score = remove_glued_substring(sequence, score)
-                    else:
-                        continue
+    for rec in tqdm.tqdm(records, total=len(list(records)), leave=False, desc=FILE_PATH):
+        sequence = str(rec.seq)
+        score = rec.letter_annotations["phred_quality"]
+        if glued_primers(sequence) is not None:
+            for r in split_sequence(sequence, score):
+                results.append(r)
+        else:
             results.append({'sequence': sequence,
-                            'score': score})
-            SeqIO.write(rec, file, 'fastq')
+                        'score': score})
     logging.info(f'{len(results)} sequences have been read!')
     create_image_with_colored_sequence(results[0:1000], f'{OUTPUT_DIR}/internal.png')
+    generate_fastq_file(results, f'{OUTPUT_DIR}/internal.fastq')
     logging.info(f'Internal fastq file has been written.')
     return results
+
+# def search_best_primer(sequences):
+#     ref = ''
+#     ref_len = 0
+#     start_pos = 0
+#     for item in PRIMERS:
+#         total_occurrences = 0
+#         for s in sequences:
+#             occurrences = s['sequence'].count(item['primer_value'])
+#             total_occurrences += occurrences
+#         item['number_of_occurences'] = total_occurrences
+#
+#     best_primer = max(PRIMERS, key=lambda x: x['number_of_occurences'])
+#     if best_primer['primer_type'] in ['PL','R_PL','C_PL','RC_PL']:
+#         ref_len = round(PRIMER_LENGTH * 0.45)
+#         start_pos = PRIMER_LENGTH - ref_len
+#         ref = best_primer['primer_value'][-ref_len:]
+#     elif best_primer['primer_type'] in ['PR', 'R_PR', 'C_PR', 'RC_PR']:
+#         ref_len = round(PRIMER_LENGTH * 0.45)
+#         start_pos = PRIMER_LENGTH + APTAMER_LENGTH
+#         ref = best_primer['primer_value'][:ref_len]
+#     return ref, ref_len, start_pos
 
 def create_image_with_colored_sequence(records, output_file, limit=200):
     width = 20  # Width of each character box
@@ -305,16 +358,20 @@ def create_image_with_colored_sequence(records, output_file, limit=200):
     image.save(output_file)
 
 
-
 def extract_segment(sequence, score, pattern, matches, scores):
     interval = [{'start': m.start(0), 'end': m.end(0)} for m in re.finditer(pattern, sequence)]
     if len(interval) > 0:
         for i in interval:
             s = sequence[i['start']:i['end']]
-            sub_s = s[:START_POS - REFERENCE_LENGTH] if PRIMER_TYPE == 'right' else s[PRIMER_LENGTH:]
-            if not is_primer(sub_s) and not glued_primers(s):
-                matches.append(s)
-                scores.append(score[i['start']:i['end']])
+            # TODO: now I just remove references if there is no initial reference at the correct position
+            # TODO: not sure it is correct. Need to check this!
+            # TODO: To remove this feature, just comment the lile if check_reference_position...
+
+            #if check_reference_position(s):
+            # sub_s = s[:START_POS - REFERENCE_LENGTH] if PRIMER_TYPE == 'right' else s[PRIMER_LENGTH:]
+            # if not is_primer(sub_s) and not glued_primers(s):
+            matches.append(s)
+            scores.append(score[i['start']:i['end']])
 
 def select_ref_sequences(seq_list, reference):
     """
@@ -353,7 +410,9 @@ def select_ref_sequences(seq_list, reference):
 
         matches = np.array([list(s) for s in matches]) if len(matches) > 0 else None
         scores = np.array([list(s) for s in scores]) if len(matches) > 0 else None
-        matches = bad_phred_score_remover(matches, scores)
+        # TODO: return back after debugging!!!!
+        if PHRED_SCORES:
+            matches = bad_phred_score_remover(matches, scores)
     else:
         fuzzy_matches = list(
             set([item['sequence'][i:i + REFERENCE_LENGTH] for item in seq_list for i in range(len(item['sequence']) - REFERENCE_LENGTH + 1)
@@ -368,7 +427,6 @@ def select_ref_sequences(seq_list, reference):
                                 scores)
         matches = np.array([list(s) for s in matches]) if len(matches) > 0 else None
         scores = np.array([list(s) for s in scores]) if len(matches) > 0 else None
-
     return matches, scores
 
 def bad_sequences_remover(matches, scores, threshold=15):
@@ -386,28 +444,43 @@ def bad_phred_score_remover(matches, scores, threshold=15):
                 matches[i][j] = None
     return matches
 
-def remove_glued_substring(sequence, score):
-    indices = []
-    start_index = 0
-    substr = glued_primers(sequence, length=PRIMER_LENGTH)
-    while True:
-        index = sequence.find(substr, start_index)
-        if index == -1:
-            break
-        indices.append(index)
-        sequence = sequence[:index] + sequence[index+len(substr):]
-        score = score[:index] + score[index + len(substr):]
-        start_index = index
-    return sequence, score
+# def remove_glued_substring(sequence, score):
+#     indices = []
+#     start_index = 0
+#     substr = glued_primers(sequence, length=PRIMER_LENGTH)
+#     while True:
+#         index = sequence.find(substr, start_index)
+#         if index == -1:
+#             break
+#         indices.append(index)
+#         sequence = sequence[:index] + sequence[index+len(substr):]
+#         score = score[:index] + score[index + len(substr):]
+#         start_index = index
+#     return sequence, score
 
+def split_sequence(sequence, score):
+    substr = glued_primers(sequence)
+    indices = [round(index + len(substr)/2) for index in range(len(sequence)) if sequence.startswith(substr, index)]
+    splitted = [{'sequence': sequence[start_index:i],
+                 'score': score[start_index:i]} for start_index, i in zip([0] + indices, indices + [len(sequence)])]
+    filtered_data = [item for item in splitted if len(item['sequence']) > TOTAL_LENGTH]
+    logging.info(f'Sequence {sequence} is split into {len(filtered_data)} subsequences as it contains glued primers {substr}:')
+    return filtered_data
 
-def glued_primers(ref, length=6, threshold=90):
-    substrings = [ref[i:i + length*2] for i in range(len(ref) - length*2 + 1)]
-    for s in substrings:
-        if (fuzz.ratio(s, RC_PR[-length:] + PR[:length]) >= threshold or \
-            fuzz.ratio(s, RC_PL[-length:] + PR[:length]) >= threshold or \
-            fuzz.ratio(s, RC_PR[-length:] + PL[:length]) >= threshold):
-            return s
+def glued_primers(ref, length=6):
+    primers = [PR, PL, R_PL, R_PR, C_PL, C_PR, RC_PL, RC_PR]
+    # glued = [i[-length:] + j[:length] for i, j in combinations(primers, 2)]
+    #
+    # return next((g for g in glued if g in ref), None)
+
+    glued = []
+    for i, j in combinations(primers, 2):
+        glued.append(i[-length:] + j[:length])
+        glued.append(j[-length:] + i[:length])
+
+    for g in glued:
+        if g in ref:
+            return g
     return None
 
 def is_primer(ref, threshold=90):
@@ -424,6 +497,12 @@ def is_primer(ref, threshold=90):
                 fuzz.ratio(s, RC_PR) >= threshold):
             return True
     return False
+
+def check_reference_position(sequence, threshold=80):
+    # filter out sequences with wrong reference
+    substring = sequence[START_POS-PRIMER_LENGTH:START_POS-PRIMER_LENGTH + REFERENCE_LENGTH]
+    return fuzz.ratio(substring, REFERENCE) >= threshold
+
 
 def scale_dataframe(df):
     # Get the minimum and maximum values for each column
@@ -483,30 +562,66 @@ def update_reference(df, seq_list, reference, direction = -1):
 
     letters_probability = df[index].to_dict()
 
-    #sorted_dict = dict(sorted(letters_probability.items(), key=lambda item: item[1], reverse=True))
+    # sorted_dict = dict(sorted(letters_probability.items(), key=lambda item: item[1], reverse=True))
+    # first_key = next(iter(sorted_dict))
+    # res = {'seq': first_key + reference['seq'][:-1] if direction == -1 else reference['seq'][1:] + first_key,
+    #            'start_pos': new_start}
+    # complement = str(Seq(PR).complement()[::-1][0:REFERENCE_LENGTH])
+    # res['complement'] = first_key + complement[:-1] if direction == -1 else complement[1:] + first_key
+    # sequences, scores = select_ref_sequences(seq_list, res)
+    # res['n_seqs'], \
+    #     res['sequences'], \
+    #     res['scores'] = len(sequences), sequences, scores
+    #
 
     refs = []
-    for k, v in letters_probability.items():
+    # for k, v in letters_probability.items():
+    for letter in ['A','C','G','T']:
+        new_ref = {'seq': letter + reference['seq'][:-1] if direction == -1 else reference['seq'][1:] + letter,
+                   'start_pos': new_start}
+        ref_name = new_ref['seq']
+        complement = str(Seq(PR).complement()[::-1][0:REFERENCE_LENGTH])
+        new_ref['complement'] = letter + complement[:-1] if direction == -1 else complement[1:] + letter
+
         try:
-            new_ref = {'seq': k + reference['seq'][:-1] if direction == -1 else reference['seq'][1:] + k,
-                       'start_pos': new_start}
-            complement = str(Seq(PR).complement()[::-1][0:REFERENCE_LENGTH])
-            new_ref['complement'] = k + complement[:-1] if direction == -1 else complement[1:] + k
             sequences, scores = select_ref_sequences(seq_list, new_ref)
             new_ref['n_seqs'], \
             new_ref['sequences'], \
             new_ref['scores'] = len(sequences), sequences, scores
-            ref_name = new_ref['seq']
             n_seqs = new_ref['n_seqs']
-            logging.info(f'Check reference {ref_name}: number of sequences is {n_seqs}')
+
+            # TODO: This part of code checks if the reference is at the correct place
+            freq = calculate_probabilities(sequences)
+            inference = highest_probability_sequence(freq)
+            # new_ref['correctness'] = evaluate_sequences_correctness(sequences)
+            new_ref['correctness'] = fuzz.ratio(inference[START_POS-PRIMER_LENGTH:], PR)
+            correctness = new_ref['correctness']
+            new_ref['hits'] = correctness/100 * n_seqs
+            hits = new_ref['hits']
             refs.append(new_ref)
+            logging.info(f'{ref_name}: Number of sequences is {n_seqs}, correctness = {correctness}, hits = {hits}')
+
         except Exception as e:
+            logging.info(f'Checking sequences for the {ref_name} has not been done...')
             continue
-    res = max(refs, key=lambda x: x['n_seqs'])
+    #res = max(refs, key=lambda x: x['n_seqs'])
+    # res = max(refs, key=lambda x: x['hits'])
+    # TODO: these three lines can be replaced with: res = max(refs, key=lambda x: x['n_seqs'])
+    max_correctness = max(refs, key=lambda x: x['correctness'])['correctness']
+    max_items = [item for item in refs if item['correctness'] == max_correctness]
+    res = max(max_items, key=lambda x: x['n_seqs'])
+
     logging.info(
         f'''{len(res['sequences'])} have been selected with {res['seq']} at {res['start_pos']}''')
+    logging.info('-------------------------------------------------------------------------------')
     return res
 
+def evaluate_sequences_correctness(sequences):
+    res = []
+    for row in sequences:
+        s = np.array2string(row, separator="")
+        res.append(fuzz.ratio(s[START_POS - PRIMER_LENGTH:], PR))
+    return np.median(res)
 
 def write_steps_excel(freq, reference, writer=None):
     freq.to_excel(writer,
