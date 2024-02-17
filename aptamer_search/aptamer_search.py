@@ -96,10 +96,17 @@ def main():
     # seq_list = [s for s in seq_list if not glued_primers(s['sequence'], 9)]
     # print(len(seq_list))
 
+    # result = ""
+    #
+    # while result is not None:
+    #     INIT_REFERENCE = initialize(seq_list)
+    #     result = searching(INIT_REFERENCE, seq_list, APTAMERS)
+    #     if result is not None:
+    #         APTAMERS.append(result)
+
     INIT_REFERENCE = initialize(seq_list)
-
-    APTAMERS.append(searching(INIT_REFERENCE, seq_list, APTAMERS))
-
+    result = searching(INIT_REFERENCE, seq_list)
+    APTAMERS.append(result)
 
 def initialize(seq_list):
     ref = {'seq': args.ref,
@@ -122,7 +129,7 @@ def merging_probabilities(probabilities):
                 pd.concat([merged_data[row], df.loc[row]], axis=1)
     return merged_data
 
-def searching(ref, seq_list, aptamers):
+def searching(ref, seq_list):
     probabilities = []
     weights_list = []
 
@@ -152,28 +159,32 @@ def searching(ref, seq_list, aptamers):
     reference = ref
 
     logging.info('Moving slicing window...')
-    move_slicing_window(seq_list,
-                        reference,
-                        ref,
-                        freq,
-                        probabilities,
-                        weights_list,
-                        steps_writer)
+    try:
+        move_slicing_window(seq_list,
+                            reference,
+                            ref,
+                            freq,
+                            probabilities,
+                            weights_list,
+                            steps_writer)
 
-    if SAVE_FILES:
-        steps_writer.close()
+        if SAVE_FILES:
+            steps_writer.close()
 
-    # Create an empty dictionary to store the merged data
-    merged_data = merging_probabilities(probabilities)
-    # Create an empty dict to store the merged weights data
-    weights_df = pd.concat(weights_list)
-    #weights_df = scale_dataframe(weights_df)
-    weights_df.reset_index(drop=True, inplace=True)
+        # Create an empty dictionary to store the merged data
+        merged_data = merging_probabilities(probabilities)
+        # Create an empty dict to store the merged weights data
+        weights_df = pd.concat(weights_list)
+        #weights_df = scale_dataframe(weights_df)
+        weights_df.reset_index(drop=True, inplace=True)
 
-    logging.info(f'Calculating statistics...')
-    result = calculate_statistics(merged_data, ref, weights_df)
+        logging.info(f'Calculating statistics...')
+        result = calculate_statistics(merged_data, ref, weights_df)
 
-    aptamers.append(result)
+        return result
+    except:
+        logging.warning('No more options')
+        return None
 
 def calculate_statistics(merged_data, ref, weights_df):
 
@@ -319,68 +330,6 @@ def get_sequences(clean=True, mode='complete'):
     logging.info(f'Internal fastq file has been written.')
     return results
 
-# def search_best_primer(sequences):
-#     ref = ''
-#     ref_len = 0
-#     start_pos = 0
-#     for item in PRIMERS:
-#         total_occurrences = 0
-#         for s in sequences:
-#             occurrences = s['sequence'].count(item['primer_value'])
-#             total_occurrences += occurrences
-#         item['number_of_occurences'] = total_occurrences
-#
-#     best_primer = max(PRIMERS, key=lambda x: x['number_of_occurences'])
-#     if best_primer['primer_type'] in ['PL','R_PL','C_PL','RC_PL']:
-#         ref_len = round(PRIMER_LENGTH * 0.45)
-#         start_pos = PRIMER_LENGTH - ref_len
-#         ref = best_primer['primer_value'][-ref_len:]
-#     elif best_primer['primer_type'] in ['PR', 'R_PR', 'C_PR', 'RC_PR']:
-#         ref_len = round(PRIMER_LENGTH * 0.45)
-#         start_pos = PRIMER_LENGTH + APTAMER_LENGTH
-#         ref = best_primer['primer_value'][:ref_len]
-#     return ref, ref_len, start_pos
-
-def create_image_with_colored_sequence(records, output_file, limit=200):
-    width = 20  # Width of each character box
-    height = 20  # Height of each character box
-    padding = 5  # Padding between character boxes
-    max_score = 40  # Maximum score
-
-    total_width = limit * (width + padding)
-    total_height = height * len(records)
-
-    image = Image.new("RGB", (total_width, total_height), "white")
-    draw = ImageDraw.Draw(image)
-
-    y = 0
-
-    for record in records:
-        sequence = record['sequence']
-        scores = record['score']
-
-        x = 0
-
-        for i, score in enumerate(scores):
-            character = sequence[i]
-
-            # Calculate the color based on the score
-            normalized_score = score / max_score  # Normalize the score between 0 and 1
-            red = int(255 * (1 - normalized_score))
-            green = int(255 * normalized_score)
-            color = (red, green, 0)
-
-            # Draw the character box with the corresponding color
-            draw.rectangle([x, y, x + width, y + height], fill=color)
-            draw.text((x+8, y), character, fill="black")
-
-            x += width + padding
-
-        y += height
-
-    image.save(output_file)
-
-
 def extract_segment(sequence, score, pattern, matches, scores):
     interval = [{'start': m.start(0), 'end': m.end(0)} for m in re.finditer(pattern, sequence)]
     if len(interval) > 0:
@@ -466,20 +415,6 @@ def bad_phred_score_remover(matches, scores, threshold=15):
             if nucleotide <= threshold:
                 matches[i][j] = None
     return matches
-
-# def remove_glued_substring(sequence, score):
-#     indices = []
-#     start_index = 0
-#     substr = glued_primers(sequence, length=PRIMER_LENGTH)
-#     while True:
-#         index = sequence.find(substr, start_index)
-#         if index == -1:
-#             break
-#         indices.append(index)
-#         sequence = sequence[:index] + sequence[index+len(substr):]
-#         score = score[:index] + score[index + len(substr):]
-#         start_index = index
-#     return sequence, score
 
 def split_sequence(sequence, score):
     substr = glued_primers(sequence)
@@ -751,6 +686,84 @@ def plot_probabilities(df, reference, title=None):
     plt.clf()
     plt.cla()
     plt.close()
+
+def create_image_with_colored_sequence(records, output_file, limit=200):
+    width = 20  # Width of each character box
+    height = 20  # Height of each character box
+    padding = 5  # Padding between character boxes
+    max_score = 40  # Maximum score
+
+    total_width = limit * (width + padding)
+    total_height = height * len(records)
+
+    image = Image.new("RGB", (total_width, total_height), "white")
+    draw = ImageDraw.Draw(image)
+
+    y = 0
+
+    for record in records:
+        sequence = record['sequence']
+        scores = record['score']
+
+        x = 0
+
+        for i, score in enumerate(scores):
+            character = sequence[i]
+
+            # Calculate the color based on the score
+            normalized_score = score / max_score  # Normalize the score between 0 and 1
+            red = int(255 * (1 - normalized_score))
+            green = int(255 * normalized_score)
+            color = (red, green, 0)
+
+            # Draw the character box with the corresponding color
+            draw.rectangle([x, y, x + width, y + height], fill=color)
+            draw.text((x+8, y), character, fill="black")
+
+            x += width + padding
+
+        y += height
+
+    image.save(output_file)
+
+# def remove_glued_substring(sequence, score):
+#     indices = []
+#     start_index = 0
+#     substr = glued_primers(sequence, length=PRIMER_LENGTH)
+#     while True:
+#         index = sequence.find(substr, start_index)
+#         if index == -1:
+#             break
+#         indices.append(index)
+#         sequence = sequence[:index] + sequence[index+len(substr):]
+#         score = score[:index] + score[index + len(substr):]
+#         start_index = index
+#     return sequence, score
+
+
+
+# def search_best_primer(sequences):
+#     ref = ''
+#     ref_len = 0
+#     start_pos = 0
+#     for item in PRIMERS:
+#         total_occurrences = 0
+#         for s in sequences:
+#             occurrences = s['sequence'].count(item['primer_value'])
+#             total_occurrences += occurrences
+#         item['number_of_occurences'] = total_occurrences
+#
+#     best_primer = max(PRIMERS, key=lambda x: x['number_of_occurences'])
+#     if best_primer['primer_type'] in ['PL','R_PL','C_PL','RC_PL']:
+#         ref_len = round(PRIMER_LENGTH * 0.45)
+#         start_pos = PRIMER_LENGTH - ref_len
+#         ref = best_primer['primer_value'][-ref_len:]
+#     elif best_primer['primer_type'] in ['PR', 'R_PR', 'C_PR', 'RC_PR']:
+#         ref_len = round(PRIMER_LENGTH * 0.45)
+#         start_pos = PRIMER_LENGTH + APTAMER_LENGTH
+#         ref = best_primer['primer_value'][:ref_len]
+#     return ref, ref_len, start_pos
+
 
 
 if __name__ == "__main__":
