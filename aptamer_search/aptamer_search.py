@@ -564,8 +564,8 @@ def update_reference(df, seq_list, reference, direction = -1):
             # TODO: This part of code checks if the reference is at the correct place
             freq = calculate_probabilities(sequences)
             inference = highest_probability_sequence(freq)
-            # new_ref['correctness'] = evaluate_sequences_correctness(sequences)
-            new_ref['correctness'] = fuzz.ratio(inference[START_POS-PRIMER_LENGTH:], PR)
+            new_ref['correctness'] = evaluate_sequences_correctness(sequences)
+            #new_ref['correctness'] = fuzz.ratio(inference[START_POS-PRIMER_LENGTH:], PR)
             correctness = new_ref['correctness']
             new_ref['hits'] = correctness/100 * n_seqs
             hits = new_ref['hits']
@@ -576,11 +576,11 @@ def update_reference(df, seq_list, reference, direction = -1):
             # logging.info(f'Checking sequences for the {ref_name} has not been done...')
             continue
     #res = max(refs, key=lambda x: x['n_seqs'])
-    # res = max(refs, key=lambda x: x['hits'])
+    res = max(refs, key=lambda x: x['hits'])
     # TODO: these three lines can be replaced with: res = max(refs, key=lambda x: x['n_seqs'])
-    max_correctness = max(refs, key=lambda x: x['correctness'])['correctness']
-    max_items = [item for item in refs if item['correctness'] == max_correctness]
-    res = max(max_items, key=lambda x: x['n_seqs'])
+    # max_correctness = max(refs, key=lambda x: x['correctness'])['correctness']
+    # max_items = [item for item in refs if item['correctness'] == max_correctness]
+    # res = max(max_items, key=lambda x: x['n_seqs'])
 
     logging.info(
         f'''{len(res['sequences'])} have been selected with {res['seq']} at {res['start_pos']}''')
@@ -590,8 +590,8 @@ def update_reference(df, seq_list, reference, direction = -1):
 def evaluate_sequences_correctness(sequences):
     res = []
     for row in sequences:
-        s = np.array2string(row, separator="")
-        res.append(fuzz.ratio(s[START_POS - PRIMER_LENGTH:], PR))
+        s = ''.join(row)
+        res.append(fuzz.ratio(s[START_POS - PRIMER_LENGTH:START_POS - PRIMER_LENGTH + REFERENCE_LENGTH], REFERENCE))
     return np.median(res)
 
 def write_steps_excel(freq, reference, writer=None):
