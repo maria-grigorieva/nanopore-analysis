@@ -13,7 +13,8 @@ from PIL import Image, ImageDraw
 from itertools import combinations
 import uuid
 from itertools import product
-
+from collections import defaultdict
+from Bio import pairwise2
 
 
 # Define the argument parser
@@ -80,6 +81,8 @@ PRIMERS = [{"primer_type": "PR", "primer_value": PR, "number_of_occurences": 0},
             {"primer_type": "RC_PR", "primer_value": RC_PR, "number_of_occurences": 0},
             {"primer_type": "RC_PL", "primer_value": RC_PL, "number_of_occurences": 0}]
 
+GLUED_PRIMERS = []
+
 logging.basicConfig(level=logging.INFO, filename=LOG_FILE, filemode="w",
                     format="%(asctime)s %(levelname)s %(message)s")
 
@@ -87,6 +90,8 @@ APTAMERS = []
 CYCLES = 0
 
 def main():
+
+    get_glued_primers_combinations(length=7)
 
     seq_list = get_sequences(clean=CLEAN)
     logging.info(f'{len(seq_list)} sequences have been read!')
@@ -318,8 +323,9 @@ def get_sequences(clean=True, mode='complete'):
     for rec in tqdm.tqdm(records, total=len(list(records)), leave=False, desc=FILE_PATH):
         sequence = str(rec.seq)
         score = rec.letter_annotations["phred_quality"]
-        if glued_primers(sequence) is not None:
-            for r in split_sequence(sequence, score):
+        glued_pr = glued_primers(sequence)
+        if glued_pr is not None:
+            for r in split_sequence(sequence, score, glued_pr):
                 results.append(r)
         else:
             results.append({'sequence': sequence,
@@ -328,13 +334,21 @@ def get_sequences(clean=True, mode='complete'):
     create_image_with_colored_sequence(results[0:1000], f'{OUTPUT_DIR}/internal.png')
     generate_fastq_file(results, f'{OUTPUT_DIR}/internal.fastq')
     logging.info(f'Internal fastq file has been written.')
+
+    for primer in GLUED_PRIMERS:
+        type = primer['glued_primers_type']
+        value = primer['glued_primers_value']
+        n = primer['n_occurences']
+        logging.info(f'Glued primers type: {type}, value = {value}, occurences = {n}')
+
     return results
 
-def extract_segment(sequence, score, pattern, matches, scores):
+def extract_segment(sequence, score, pattern, matches, scores, remove_incorrect=True, threshold=75):
     interval = [{'start': m.start(0), 'end': m.end(0)} for m in re.finditer(pattern, sequence)]
     if len(interval) > 0:
         for i in interval:
             s = sequence[i['start']:i['end']]
+            #avg_score = (1 - np.mean([pow(10, -i / 10) for i in score[i['start']:i['end']]])) * 100
             # TODO: now I just remove references if there is no initial reference at the correct position
             # TODO: not sure it is correct. Need to check this!
             # TODO: To remove this feature, just comment the lile if check_reference_position...
@@ -342,8 +356,27 @@ def extract_segment(sequence, score, pattern, matches, scores):
             #if check_reference_position(s):
             # sub_s = s[:START_POS - REFERENCE_LENGTH] if PRIMER_TYPE == 'right' else s[PRIMER_LENGTH:]
             # if not is_primer(sub_s) and not glued_primers(s):
-            matches.append(s)
-            scores.append(score[i['start']:i['end']])
+            if remove_incorrect:
+                # remove all sequences with wrong initial reference at its start position
+                # remove all incorrect sequences (i.e. AAAAAAA, ACACACACAC, GGGGGGGGG, ...)
+                position = 0 if PRIMER_TYPE == 'left' else APTAMER_LENGTH
+                primer = PR if PRIMER_TYPE == 'right' else PL
+                #if calculate_similarity(s[position:position+PRIMER_LENGTH],primer) >= threshold:
+                #if pairwise_similarity(s[position:position + PRIMER_LENGTH], primer) >= threshold:
+                if fuzz.ratio(s[position:position+PRIMER_LENGTH],primer) >= threshold:
+                    matches.append(s)
+                    scores.append(score[i['start']:i['end']])
+                #
+                # incorrect_substrings = find_repeatable_substrings(s)
+                # if len(incorrect_substrings) > 0:
+                #     for s in incorrect_substrings:
+                #         result_string = s
+                #         for substring in incorrect_substrings:
+                #             result_string = result_string.replace(substring, "")
+
+            else:
+                matches.append(s)
+                scores.append(score[i['start']:i['end']])
 
 def select_ref_sequences(seq_list, reference):
     """
@@ -416,30 +449,48 @@ def bad_phred_score_remover(matches, scores, threshold=15):
                 matches[i][j] = None
     return matches
 
-def split_sequence(sequence, score):
-    substr = glued_primers(sequence)
-    indices = [round(index + len(substr)/2) for index in range(len(sequence)) if sequence.startswith(substr, index)]
+def split_sequence(sequence, score, indices):
     splitted = [{'sequence': sequence[start_index:i],
                  'score': score[start_index:i]} for start_index, i in zip([0] + indices, indices + [len(sequence)])]
     filtered_data = [item for item in splitted if len(item['sequence']) > TOTAL_LENGTH]
-    logging.info(f'Sequence {sequence} is split into {len(filtered_data)} subsequences as it contains glued primers {substr}:')
+    #logging.info(f'Sequence {sequence} is split into {len(filtered_data)} subsequences as it contains glued primers {substr}:')
     return filtered_data
 
-def glued_primers(ref, length=6):
-    primers = [PR, PL, R_PL, R_PR, C_PL, C_PR, RC_PL, RC_PR]
-    # glued = [i[-length:] + j[:length] for i, j in combinations(primers, 2)]
-    #
-    # return next((g for g in glued if g in ref), None)
 
-    glued = []
+def get_glued_primers_combinations(length=round(PRIMER_LENGTH/2)):
+    primers = [p["primer_value"] for p in PRIMERS]
     for i, j in combinations(primers, 2):
-        glued.append(i[-length:] + j[:length])
-        glued.append(j[-length:] + i[:length])
+        glued_primers_type = []
+        val1 = i[-length:] + j[:length]
+        for p in PRIMERS:
+            if i[-length:] in p['primer_value']:
+                glued_primers_type.append(p['primer_type'])
+            if j[:length] in p['primer_value']:
+                glued_primers_type.append(p['primer_type'])
+            if len(glued_primers_type) == 2:
+                break
+        GLUED_PRIMERS.append({'glued_primers_type': '--'.join(glued_primers_type),
+                              'glued_primers_value': val1,
+                              'n_occurences': 0})
 
-    for g in glued:
-        if g in ref:
-            return g
-    return None
+        val2 = j[-length:] + i[:length]
+        GLUED_PRIMERS.append({'glued_primers_type': '--'.join(glued_primers_type[::-1]),
+                              'glued_primers_value': val2,
+                              'n_occurences': 0})
+
+def glued_primers(s, fuzzy=False, length=7, threshold=90):
+    for g in GLUED_PRIMERS:
+        result = []
+        if fuzzy:
+            substrings = [s[i:i + length*2] for i in range(len(s) - length*2 + 1)]
+            result = [s.find(i) for i in substrings if fuzz.ratio(i,g['glued_primers_value']) >= threshold]
+        else:
+            result = [i.start() for i in re.finditer(g['glued_primers_value'], s)]
+        if len(result) > 0:
+            g['n_occurences'] += len(result)
+            return [round(i + len(g['glued_primers_value']) / 2) for i in result]
+    else:
+        return None
 
 def is_primer(ref, threshold=90):
     # filter out sequences with primers at a wrong position
@@ -564,10 +615,11 @@ def update_reference(df, seq_list, reference, direction = -1):
             # TODO: This part of code checks if the reference is at the correct place
             freq = calculate_probabilities(sequences)
             inference = highest_probability_sequence(freq)
-            new_ref['correctness'] = evaluate_sequences_correctness(sequences)
+            new_ref['correctness'] = evaluate_sequences_correctness(sequences, scores)
+            # new_ref['correctness'] = pairwise_similarity(sequences, scores)
             #new_ref['correctness'] = fuzz.ratio(inference[START_POS-PRIMER_LENGTH:], PR)
             correctness = new_ref['correctness']
-            new_ref['hits'] = correctness/100 * n_seqs
+            new_ref['hits'] = n_seqs * correctness
             hits = new_ref['hits']
             refs.append(new_ref)
             logging.info(f'{ref_name}: Number of sequences is {n_seqs}, correctness = {correctness}, hits = {hits}')
@@ -575,24 +627,50 @@ def update_reference(df, seq_list, reference, direction = -1):
         except Exception as e:
             # logging.info(f'Checking sequences for the {ref_name} has not been done...')
             continue
-    #res = max(refs, key=lambda x: x['n_seqs'])
+    # res = max(refs, key=lambda x: x['n_seqs'])
     res = max(refs, key=lambda x: x['hits'])
     # TODO: these three lines can be replaced with: res = max(refs, key=lambda x: x['n_seqs'])
+    # option 1: max correctness --> max n_seq
     # max_correctness = max(refs, key=lambda x: x['correctness'])['correctness']
     # max_items = [item for item in refs if item['correctness'] == max_correctness]
     # res = max(max_items, key=lambda x: x['n_seqs'])
+
+    # option 2: max n_seq --> max correctness
+    # max_n_seq = max(refs, key=lambda x: x['n_seq'])['n_seq']
+    # max_items = [item for item in refs if item['n_seq'] == max_n_seq]
+    # res = max(max_items, key=lambda x: x['correctness'])
 
     logging.info(
         f'''{len(res['sequences'])} have been selected with {res['seq']} at {res['start_pos']}''')
     logging.info('-------------------------------------------------------------------------------')
     return res
 
-def evaluate_sequences_correctness(sequences):
-    res = []
-    for row in sequences:
+def evaluate_sequences_correctness(sequences, scores):
+    seq = []
+    sc = []
+    for idx, row in enumerate(sequences):
         s = ''.join(row)
-        res.append(fuzz.ratio(s[START_POS - PRIMER_LENGTH:START_POS - PRIMER_LENGTH + REFERENCE_LENGTH], REFERENCE))
-    return np.median(res)
+        position = 0 if PRIMER_TYPE == 'left' else APTAMER_LENGTH
+        primer = PR if PRIMER_TYPE == 'right' else PL
+        #seq.append(calculate_similarity(s[position:position+PRIMER_LENGTH], primer)/100)
+        seq.append(pairwise_similarity(s[position:position+PRIMER_LENGTH], primer)/100)
+        # seq.append(round(fuzz.ratio(s[position:position+PRIMER_LENGTH], primer)/100,4))
+        sc.append(1 - np.mean([pow(10, -i/10) for i in scores[idx][position:position+PRIMER_LENGTH]]))
+        res = [np.mean([a,b]) for a, b in zip(seq, sc)]
+    return np.mean(res)
+
+def calculate_similarity(string1, string2):
+    if len(string1) != len(string2):
+        raise ValueError("Strings must be of the same length")
+
+    count_same = sum(c1 == c2 for c1, c2 in zip(string1, string2))
+    percentage_similarity = (count_same / len(string1))*100
+    return percentage_similarity
+
+def pairwise_similarity(string1, string2):
+    alignments = pairwise2.align.globalxx(string1, string2)
+    max_score = np.mean([i.score for i in alignments])
+    return max_score * 100 / len(string1)
 
 def write_steps_excel(freq, reference, writer=None):
     freq.to_excel(writer,
@@ -725,6 +803,20 @@ def create_image_with_colored_sequence(records, output_file, limit=200):
         y += height
 
     image.save(output_file)
+
+def find_repeatable_substrings(string):
+    repeatable_substrings = set()
+    # Find repeatable characters
+    repeatable_characters = re.findall(r'((\w)\2{5,})', string)
+    repeatable_substrings.update([substring[0] for substring in repeatable_characters])
+    # Find repeatable bigrams
+    repeatable_bigrams = re.findall(r'((\w{2})\2{4,})', string)
+    repeatable_substrings.update([substring[0] for substring in repeatable_bigrams])
+    # Find repeatable trigrams
+    repeatable_trigrams = re.findall(r'((\w{3})\2{3,})', string)
+    repeatable_substrings.update([substring[0] for substring in repeatable_trigrams])
+    return list(repeatable_substrings)
+
 
 # def remove_glued_substring(sequence, score):
 #     indices = []
