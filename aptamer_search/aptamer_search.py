@@ -15,6 +15,7 @@ import uuid
 from itertools import product
 from collections import defaultdict
 from Bio import pairwise2
+from Bio.pairwise2 import format_alignment
 
 
 # Define the argument parser
@@ -239,14 +240,8 @@ def calculate_statistics(merged_data, ref, weights_df):
 
 def weighted_statistics(df_A, df_B, threshold=0.4):
     statistics = {
-        'count': [],
-        'mean': [],
-        'std': [],
-        'min': [],
-        '25%': [],
-        '50%': [],
-        '75%': [],
-        'max': []
+        'count': [], 'mean': [], 'std': [], 'min': [],
+        '25%': [], '50%': [], '75%': [], 'max': []
     }
 
     for column in df_A.columns:
@@ -348,14 +343,7 @@ def extract_segment(sequence, score, pattern, matches, scores, remove_incorrect=
     if len(interval) > 0:
         for i in interval:
             s = sequence[i['start']:i['end']]
-            #avg_score = (1 - np.mean([pow(10, -i / 10) for i in score[i['start']:i['end']]])) * 100
-            # TODO: now I just remove references if there is no initial reference at the correct position
-            # TODO: not sure it is correct. Need to check this!
-            # TODO: To remove this feature, just comment the lile if check_reference_position...
 
-            #if check_reference_position(s):
-            # sub_s = s[:START_POS - REFERENCE_LENGTH] if PRIMER_TYPE == 'right' else s[PRIMER_LENGTH:]
-            # if not is_primer(sub_s) and not glued_primers(s):
             if remove_incorrect:
                 # remove all sequences with wrong initial reference at its start position
                 # remove all incorrect sequences (i.e. AAAAAAA, ACACACACAC, GGGGGGGGG, ...)
@@ -450,8 +438,14 @@ def bad_phred_score_remover(matches, scores, threshold=15):
     return matches
 
 def split_sequence(sequence, score, indices):
-    splitted = [{'sequence': sequence[start_index:i],
-                 'score': score[start_index:i]} for start_index, i in zip([0] + indices, indices + [len(sequence)])]
+    splitted = []
+    start_index = 0
+    for idx in indices:
+        splitted.append({'sequence': sequence[start_index:idx],
+                        'score': score[start_index:idx]})
+        start_index = idx
+    splitted.append({'sequence': sequence[start_index:],
+                        'score': score[start_index:]})
     filtered_data = [item for item in splitted if len(item['sequence']) > TOTAL_LENGTH]
     #logging.info(f'Sequence {sequence} is split into {len(filtered_data)} subsequences as it contains glued primers {substr}:')
     return filtered_data
@@ -479,38 +473,19 @@ def get_glued_primers_combinations(length=round(PRIMER_LENGTH/2)):
                               'n_occurences': 0})
 
 def glued_primers(s, fuzzy=False, length=7, threshold=90):
+    result = []
     for g in GLUED_PRIMERS:
-        result = []
         if fuzzy:
             substrings = [s[i:i + length*2] for i in range(len(s) - length*2 + 1)]
-            result = [s.find(i) for i in substrings if fuzz.ratio(i,g['glued_primers_value']) >= threshold]
+            tmp = [s.find(i) for i in substrings if fuzz.ratio(i,g['glued_primers_value']) >= threshold]
         else:
-            result = [i.start() for i in re.finditer(g['glued_primers_value'], s)]
-        if len(result) > 0:
-            g['n_occurences'] += len(result)
-            return [round(i + len(g['glued_primers_value']) / 2) for i in result]
-    else:
-        return None
+            tmp = [val for val in [i.start() for i in re.finditer(g['glued_primers_value'], s)]]
+        if len(tmp) > 0:
+            g['n_occurences'] += len(tmp)
+        for val in tmp:
+            result.append(round(val + len(g['glued_primers_value']) / 2))
 
-def is_primer(ref, threshold=90):
-    # filter out sequences with primers at a wrong position
-    substrings = [ref[i:i + PRIMER_LENGTH] for i in range(len(ref) - PRIMER_LENGTH + 1)]
-    for s in substrings:
-        if (fuzz.ratio(s, PR) >= threshold or \
-                fuzz.ratio(s, PL) >= threshold or \
-                fuzz.ratio(s, R_PL) >= threshold or \
-                fuzz.ratio(s, R_PR) >= threshold or \
-                fuzz.ratio(s, C_PL) >= threshold or \
-                fuzz.ratio(s, C_PR) >= threshold or \
-                fuzz.ratio(s, RC_PL) >= threshold or \
-                fuzz.ratio(s, RC_PR) >= threshold):
-            return True
-    return False
-
-def check_reference_position(sequence, threshold=80):
-    # filter out sequences with wrong reference
-    substring = sequence[START_POS-PRIMER_LENGTH:START_POS-PRIMER_LENGTH + REFERENCE_LENGTH]
-    return fuzz.ratio(substring, REFERENCE) >= threshold
+    return sorted(result) if len(result)>0 else None
 
 
 def scale_dataframe(df):
@@ -578,20 +553,7 @@ def update_reference(df, seq_list, reference, direction = -1):
         (1, 'right'): new_start + REFERENCE_LENGTH - PRIMER_LENGTH - 1
     }.get((direction, PRIMER_TYPE), 0)
 
-    letters_probability = df[index].to_dict()
-
-    # sorted_dict = dict(sorted(letters_probability.items(), key=lambda item: item[1], reverse=True))
-    # first_key = next(iter(sorted_dict))
-    # res = {'seq': first_key + reference['seq'][:-1] if direction == -1 else reference['seq'][1:] + first_key,
-    #            'start_pos': new_start}
-    # complement = str(Seq(PR).complement()[::-1][0:REFERENCE_LENGTH])
-    # res['complement'] = first_key + complement[:-1] if direction == -1 else complement[1:] + first_key
-    # sequences, scores = select_ref_sequences(seq_list, res)
-    # res['n_seqs'], \
-    #     res['sequences'], \
-    #     res['scores'] = len(sequences), sequences, scores
-    #
-
+    # letters_probability = df[index].to_dict()
     refs = []
     step = abs(direction)
     # get letters combinations
@@ -612,65 +574,61 @@ def update_reference(df, seq_list, reference, direction = -1):
             new_ref['scores'] = len(sequences), sequences, scores
             n_seqs = new_ref['n_seqs']
 
-            # TODO: This part of code checks if the reference is at the correct place
-            freq = calculate_probabilities(sequences)
-            inference = highest_probability_sequence(freq)
-            new_ref['correctness'] = evaluate_sequences_correctness(sequences, scores)
+            #freq = calculate_probabilities(sequences)
+            #inference = highest_probability_sequence(freq)
+            new_ref['correctness'] = evaluate_sequences_correctness(ref_name, sequences, scores)
             # new_ref['correctness'] = pairwise_similarity(sequences, scores)
             #new_ref['correctness'] = fuzz.ratio(inference[START_POS-PRIMER_LENGTH:], PR)
             correctness = new_ref['correctness']
             new_ref['hits'] = n_seqs * correctness
-            hits = new_ref['hits']
             refs.append(new_ref)
-            logging.info(f'{ref_name}: Number of sequences is {n_seqs}, correctness = {correctness}, hits = {hits}')
-
         except Exception as e:
-            # logging.info(f'Checking sequences for the {ref_name} has not been done...')
             continue
-    # res = max(refs, key=lambda x: x['n_seqs'])
     res = max(refs, key=lambda x: x['hits'])
-    # TODO: these three lines can be replaced with: res = max(refs, key=lambda x: x['n_seqs'])
-    # option 1: max correctness --> max n_seq
-    # max_correctness = max(refs, key=lambda x: x['correctness'])['correctness']
-    # max_items = [item for item in refs if item['correctness'] == max_correctness]
-    # res = max(max_items, key=lambda x: x['n_seqs'])
-
-    # option 2: max n_seq --> max correctness
-    # max_n_seq = max(refs, key=lambda x: x['n_seq'])['n_seq']
-    # max_items = [item for item in refs if item['n_seq'] == max_n_seq]
-    # res = max(max_items, key=lambda x: x['correctness'])
 
     logging.info(
         f'''{len(res['sequences'])} have been selected with {res['seq']} at {res['start_pos']}''')
     logging.info('-------------------------------------------------------------------------------')
     return res
 
-def evaluate_sequences_correctness(sequences, scores):
+def evaluate_sequences_correctness(ref_name, sequences, scores):
     seq = []
     sc = []
+    aligned_primers = []
     for idx, row in enumerate(sequences):
         s = ''.join(row)
         position = 0 if PRIMER_TYPE == 'left' else APTAMER_LENGTH
         primer = PR if PRIMER_TYPE == 'right' else PL
         #seq.append(calculate_similarity(s[position:position+PRIMER_LENGTH], primer)/100)
-        seq.append(pairwise_similarity(s[position:position+PRIMER_LENGTH], primer)/100)
+        seq.append(pairwise_similarity(s[position:position+PRIMER_LENGTH], primer, aligned_primers)/100)
         # seq.append(round(fuzz.ratio(s[position:position+PRIMER_LENGTH], primer)/100,4))
         sc.append(1 - np.mean([pow(10, -i/10) for i in scores[idx][position:position+PRIMER_LENGTH]]))
         res = [np.mean([a,b]) for a, b in zip(seq, sc)]
-    return np.mean(res)
+    mean_sim_score = round(np.mean([i.score for i in aligned_primers]))
+    n_seqs = len(sequences)
+    correctness = np.mean(res)
+    hits = n_seqs * correctness
+    logging.info(f'{ref_name}: Number of sequences is {n_seqs}, correctness = {correctness}, hits = {hits}')
+    for i in aligned_primers:
+        if i.score == mean_sim_score:
+            logging.info("\n"+format_alignment(*i))
+            break
+    return correctness
 
 def calculate_similarity(string1, string2):
-    if len(string1) != len(string2):
-        raise ValueError("Strings must be of the same length")
-
     count_same = sum(c1 == c2 for c1, c2 in zip(string1, string2))
     percentage_similarity = (count_same / len(string1))*100
     return percentage_similarity
 
-def pairwise_similarity(string1, string2):
+def pairwise_similarity(string1, string2, aligned_primers):
     alignments = pairwise2.align.globalxx(string1, string2)
-    max_score = np.mean([i.score for i in alignments])
-    return max_score * 100 / len(string1)
+    mean_score = np.mean([i.score for i in alignments])
+    # save alignments for logging
+    for a in alignments:
+        if a.score == mean_score:
+            aligned_primers.append(a)
+            break
+    return mean_score * 100 / len(string1)
 
 def write_steps_excel(freq, reference, writer=None):
     freq.to_excel(writer,
@@ -816,22 +774,6 @@ def find_repeatable_substrings(string):
     repeatable_trigrams = re.findall(r'((\w{3})\2{3,})', string)
     repeatable_substrings.update([substring[0] for substring in repeatable_trigrams])
     return list(repeatable_substrings)
-
-
-# def remove_glued_substring(sequence, score):
-#     indices = []
-#     start_index = 0
-#     substr = glued_primers(sequence, length=PRIMER_LENGTH)
-#     while True:
-#         index = sequence.find(substr, start_index)
-#         if index == -1:
-#             break
-#         indices.append(index)
-#         sequence = sequence[:index] + sequence[index+len(substr):]
-#         score = score[:index] + score[index + len(substr):]
-#         start_index = index
-#     return sequence, score
-
 
 
 # def search_best_primer(sequences):
