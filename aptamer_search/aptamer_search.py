@@ -94,6 +94,8 @@ def main():
 
     get_glued_primers_combinations(length=7)
 
+    print_info()
+
     seq_list = get_sequences(clean=CLEAN)
     logging.info(f'{len(seq_list)} sequences have been read!')
     # REFERENCE, REFERENCE_LENGTH, START_POS = search_best_primer(seq_list)
@@ -122,7 +124,6 @@ def initialize(seq_list):
     ref['sequences'], \
         ref['scores'] = select_ref_sequences(seq_list, ref)
 
-    print_info(seq_list, ref)
     return ref
 
 def merging_probabilities(probabilities):
@@ -258,24 +259,31 @@ def weighted_statistics(df_A, df_B, threshold=0.4):
     return pd.DataFrame(statistics).T
 
 
-def print_info(seq_list, init_ref):
+def print_info():
     # Print out the values of all the arguments
-    logging.info(f'Number of sequences in {FILE_PATH}: {len(seq_list)}')
+    logging.info("CONFIGURATION PARAMETERS:")
+    logging.info("===============================================================================")
     logging.info(f"Length of an aptamer: {APTAMER_LENGTH}")
     logging.info(f"Length of a primer: {PRIMER_LENGTH}")
     logging.info(f"Left Primer: {PL}")
     logging.info(f"Right Primer: {PR}")
+    logging.info(f"Reversed Left Primer: {R_PL}")
+    logging.info(f"Reversed Right Primer: {R_PR}")
+    logging.info(f"Complementaty Left Primer: {C_PL}")
+    logging.info(f"Complementary Right Primer: {C_PR}")
+    logging.info(f"Complementaty Reversed Left Primer: {RC_PL}")
+    logging.info(f"Complementary Reversed Right Primer: {RC_PR}")
     logging.info(f"Input file: {FILE_PATH}")
     logging.info(f"Directory for the output: {OUTPUT_DIR}")
     logging.info(f"Initial reference length: {REFERENCE_LENGTH}")
-    logging.info(f"Initial reference sequence: {init_ref['seq']}")
-    logging.info(f"Start position of the initial reference sequence: {init_ref['start_pos']}")
+    logging.info(f"Initial reference sequence: {REFERENCE}")
+    logging.info(f"Start position of the initial reference sequence: {START_POS}")
     logging.info(f"Type of a primer for searching: {PRIMER_TYPE}")
     logging.info(f"Fuzzy search: {FUZZY}")
     logging.info(f"Take into account nucleotide phred scores: {PHRED_SCORES}")
     logging.info(f"Phred scores cutoff: {PHRED_CUTOFF}")
-    logging.info(f"Complementary Right Primer: {C_PR}")
-    logging.info(f"Complementaty Left Primer: {C_PL}")
+    logging.info("===============================================================================")
+
 
 def infer_sequence(probability, df, init_ref):
     result = highest_probability_sequence(df.copy())
@@ -330,11 +338,14 @@ def get_sequences(clean=True, mode='complete'):
     generate_fastq_file(results, f'{OUTPUT_DIR}/internal.fastq')
     logging.info(f'Internal fastq file has been written.')
 
+    logging.info("DETECTED GLUED PRIMERS:")
+    logging.info("===============================================================================")
     for primer in GLUED_PRIMERS:
         type = primer['glued_primers_type']
         value = primer['glued_primers_value']
         n = primer['n_occurences']
         logging.info(f'Glued primers type: {type}, value = {value}, occurences = {n}')
+    logging.info("===============================================================================")
 
     return results
 
@@ -576,10 +587,10 @@ def update_reference(df, seq_list, reference, direction = -1):
 
             #freq = calculate_probabilities(sequences)
             #inference = highest_probability_sequence(freq)
-            new_ref['correctness'] = evaluate_sequences_correctness(ref_name, sequences, scores)
+            new_ref['primer_score'] = evaluate_sequences_correctness(ref_name, sequences, scores)
             # new_ref['correctness'] = pairwise_similarity(sequences, scores)
             #new_ref['correctness'] = fuzz.ratio(inference[START_POS-PRIMER_LENGTH:], PR)
-            correctness = new_ref['correctness']
+            correctness = new_ref['primer_score']
             new_ref['hits'] = n_seqs * correctness
             refs.append(new_ref)
         except Exception as e:
@@ -588,7 +599,8 @@ def update_reference(df, seq_list, reference, direction = -1):
 
     logging.info(
         f'''{len(res['sequences'])} have been selected with {res['seq']} at {res['start_pos']}''')
-    logging.info('-------------------------------------------------------------------------------')
+    logging.info('*******************************************************************************')
+
     return res
 
 def evaluate_sequences_correctness(ref_name, sequences, scores):
@@ -606,14 +618,15 @@ def evaluate_sequences_correctness(ref_name, sequences, scores):
         res = [np.mean([a,b]) for a, b in zip(seq, sc)]
     mean_sim_score = round(np.mean([i.score for i in aligned_primers]))
     n_seqs = len(sequences)
-    correctness = np.mean(res)
-    hits = n_seqs * correctness
-    logging.info(f'{ref_name}: Number of sequences is {n_seqs}, correctness = {correctness}, hits = {hits}')
+    primer_score = np.mean(res)
+    hits = n_seqs * primer_score
+    logging.info(f'{ref_name}: Number of sequences is {n_seqs}, correctness = {primer_score}, hits = {hits}')
     for i in aligned_primers:
         if i.score == mean_sim_score:
-            logging.info("\n"+format_alignment(*i))
+            for s in format_alignment(*i).split('\n'):
+                logging.info(s)
             break
-    return correctness
+    return primer_score
 
 def calculate_similarity(string1, string2):
     count_same = sum(c1 == c2 for c1, c2 in zip(string1, string2))
@@ -664,7 +677,9 @@ def move_slicing_window(seq_list, reference, init_ref, freq, probabilities, weig
 
         plot_probabilities(freq, reference)
 
-    logging.info('Moving left...')
+    logging.info("===============================================================================")
+    logging.info('MOVING LEFT...')
+    logging.info("===============================================================================")
     pbar = tqdm.tqdm(total=(reference['start_pos'] - left_limit))
     while reference['start_pos'] > left_limit + step:
         update_window(direction=-step)
@@ -673,15 +688,18 @@ def move_slicing_window(seq_list, reference, init_ref, freq, probabilities, weig
 
     reference = init_ref
     freq = calculate_probabilities(reference['sequences'])
-
+    logging.info("===============================================================================")
     logging.info('The reference sequence has been reset to the initial value')
-
-    logging.info('Moving right...')
+    logging.info('\n')
+    logging.info("===============================================================================")
+    logging.info('MOVING RIGHT...')
+    logging.info("===============================================================================")
     pbar = tqdm.tqdm(total=(left_limit-reference['start_pos']))
     while reference['start_pos'] < right_limit - step:
         update_window(direction=step)
         pbar.update(1)  # Increment the progress bar by 1
     pbar.close()  # Close the progress bar once the loop is finished
+    logging.info("===============================================================================")
 
     logging.info('Moving slicing window has been finished!')
 
