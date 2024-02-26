@@ -13,7 +13,6 @@ from PIL import Image, ImageDraw
 from itertools import combinations
 import uuid
 from itertools import product
-from collections import defaultdict
 from Bio import pairwise2
 from Bio.pairwise2 import format_alignment
 
@@ -35,7 +34,8 @@ args_info = [
     ['-c', '--complement', bool, 'Add complementary primer', False],
     ['-w', '--weights', bool, 'Take into account nucleotide phred scores', False],
     ['-ph', '--cutoff', int, 'Phred score cut off', 15],
-    ['-cl', '--initial_cleaning', bool, 'Initial cleaning of sequences from glued primers', True]
+    ['-cl', '--initial_cleaning', bool, 'Initial cleaning of sequences from glued primers', True],
+    ['-flex', '--flexible_shifts', bool, 'Flexible slicing window (improves performance, but decreases accuracy)', False]
 ]
 
 # Add arguments to the parser
@@ -67,6 +67,7 @@ SAVE_FILES = args.save
 PHRED_SCORES = args.weights
 PHRED_CUTOFF = args.cutoff
 CLEAN = args.initial_cleaning
+FLEXIBLE_SHIFTS = args.flexible_shifts
 
 # Set all variations of primers
 R_PL, R_PR = PL[::-1], PR[::-1]
@@ -124,6 +125,8 @@ def initialize(seq_list):
     ref['sequences'], \
         ref['scores'] = select_ref_sequences(seq_list, ref)
 
+    ref['freq'] = calculate_probabilities(ref['sequences'])
+
     return ref
 
 def merging_probabilities(probabilities):
@@ -146,9 +149,10 @@ def searching(ref, seq_list):
     logging.info(f'''{len(ref['sequences'])} have been selected with 
                 {ref['seq']} at {ref['start_pos']}''')
 
-    logging.info(f'''Calculating probabilities of the occurence of letters at each position...''')
-    freq = calculate_probabilities(ref['sequences'])
-    probabilities.append(freq)
+    # logging.info(f'''Calculating probabilities of the occurence of letters at each position...''')
+    # freq = calculate_probabilities(ref['sequences'])
+    # probabilities.append(freq)
+    probabilities.append(ref['freq'])
 
     weights = calculate_weights(ref['scores'])
     weights_list.append(weights)
@@ -157,11 +161,11 @@ def searching(ref, seq_list):
 
     if SAVE_FILES:
         steps_writer = pd.ExcelWriter(f'{OUTPUT_DIR}/{fname}.xlsx')
-        write_steps_excel(freq, ref, steps_writer)
+        write_steps_excel(ref, steps_writer)
     else:
         steps_writer = None
 
-    plot_probabilities(freq, ref)
+    plot_probabilities(ref)
 
     reference = ref
 
@@ -170,7 +174,7 @@ def searching(ref, seq_list):
         move_slicing_window(seq_list,
                             reference,
                             ref,
-                            freq,
+                            # freq,
                             probabilities,
                             weights_list,
                             steps_writer)
@@ -287,7 +291,7 @@ def print_info():
 
 def infer_sequence(probability, df, init_ref):
     result = highest_probability_sequence(df.copy())
-    plot_probabilities(df, {'seq': result, 'start_pos': 0}, probability)
+    plot_probabilities({'seq': result, 'start_pos': 0, 'freq': df}, probability)
     print_result(result, init_ref, probability)
     return result
 
@@ -542,7 +546,7 @@ def get_combinations(length):
                 combinations.append(''.join(combo))
     return combinations
 
-def update_reference(df, seq_list, reference, direction = -1):
+def update_reference(seq_list, reference, direction = -1):
     """
     Shift the current reference sequence to the left or right and generate a new matrix (numpy array)
     by extracting sequences from the array of all sequences.
@@ -566,17 +570,12 @@ def update_reference(df, seq_list, reference, direction = -1):
 
     # letters_probability = df[index].to_dict()
     refs = []
-    step = abs(direction)
-    # get letters combinations
-    # comb = list(combinations(['A','C','G','T'], step))
-    for letter in get_combinations(step):
-    # for k, v in letters_probability.items():
-    # for letter in ['A','C','G','T']:
-        new_ref = {'seq': letter + reference['seq'][:-step] if direction == -step else reference['seq'][step:] + letter,
+    for letter in ['A','C','G','T']:
+        new_ref = {'seq': letter + reference['seq'][:-1] if direction == -1 else reference['seq'][1:] + letter,
                    'start_pos': new_start}
         ref_name = new_ref['seq']
-        complement = str(Seq(PR).complement()[::-step][0:REFERENCE_LENGTH])
-        new_ref['complement'] = letter + complement[:-step] if direction == -step else complement[step:] + letter
+        complement = str(Seq(PR).complement()[::-1][0:REFERENCE_LENGTH])
+        new_ref['complement'] = letter + complement[:-1] if direction == -1 else complement[1:] + letter
 
         try:
             sequences, scores = select_ref_sequences(seq_list, new_ref)
@@ -643,63 +642,101 @@ def pairwise_similarity(string1, string2, aligned_primers):
             break
     return mean_score * 100 / len(string1)
 
-def write_steps_excel(freq, reference, writer=None):
-    freq.to_excel(writer,
+def write_steps_excel(reference, writer=None):
+    reference['freq'].to_excel(writer,
                   sheet_name=reference['seq'],
                   index=True,
                   header=True)
     pd.DataFrame(reference['sequences']).to_excel(writer,
                                                    sheet_name=reference['seq'],
-                                                   startrow=freq.shape[0] + 2,
+                                                   startrow=reference['freq'].shape[0] + 2,
                                                    index=True,
                                                    header=True)
 
 
-def move_slicing_window(seq_list, reference, init_ref, freq, probabilities, weights_list, writer, step=1):
+
+def maximized_probabilities(probabilities, threshold=0.90):
+
+    max_length = 0
+    start_index = 0
+    end_index = 0
+
+    current_length = 0
+    for i, prob in enumerate(probabilities):
+        if prob >= threshold:
+            current_length += 1
+            if current_length > max_length:
+                max_length = current_length
+                end_index = i
+                start_index = end_index - max_length + 1
+        else:
+            current_length = 0
+
+    return list(range(start_index, end_index + 1))
+
+def move_slicing_window(seq_list, reference, init_ref,
+                        #freq,
+                        probabilities, weights_list, writer):
     left_limit = PRIMER_LENGTH if PRIMER_TYPE == 'right' else 0
     right_limit = TOTAL_LENGTH - REFERENCE_LENGTH - 1 if PRIMER_TYPE == 'right' \
         else TOTAL_LENGTH - PRIMER_LENGTH - REFERENCE_LENGTH - 1
 
     def update_window(direction):
-        nonlocal reference, freq
-        reference = update_reference(freq,
-                                     seq_list,
+        nonlocal reference
+        if FLEXIBLE_SHIFTS:
+            p = reference['freq'].max().tolist()
+            high_seq = highest_probability_sequence(reference['freq'])
+            max_p = maximized_probabilities(p)
+            if len(max_p) > 0:
+                shift = np.min(max_p) if direction < 0 else np.max(max_p)
+                new_ref = high_seq[shift:shift+REFERENCE_LENGTH] if direction < 0 else \
+                                   high_seq[shift:shift + REFERENCE_LENGTH]
+                new_start_pos = shift + PRIMER_LENGTH if direction < 0 else shift + PRIMER_LENGTH - REFERENCE_LENGTH
+                if direction < 0 or PRIMER_LENGTH + APTAMER_LENGTH - new_start_pos > REFERENCE_LENGTH:
+                    reference['seq'] = new_ref
+                    reference['start_pos'] = new_start_pos
+        reference = update_reference(seq_list,
                                      reference,
                                      direction=direction)
-        freq = calculate_probabilities(reference['sequences'])
+        reference['freq'] = calculate_probabilities(reference['sequences'])
         weights = calculate_weights(reference['scores'])
 
         if SAVE_FILES:
-            write_steps_excel(freq, reference, writer)
+            write_steps_excel(reference, writer)
 
-        probabilities.append(freq)
+        probabilities.append(reference['freq'])
         weights_list.append(weights)
 
-        plot_probabilities(freq, reference)
+        plot_probabilities(reference)
 
-    logging.info("===============================================================================")
-    logging.info('MOVING LEFT...')
-    logging.info("===============================================================================")
-    pbar = tqdm.tqdm(total=(reference['start_pos'] - left_limit))
-    while reference['start_pos'] > left_limit + step:
-        update_window(direction=-step)
-        pbar.update(1)  # Increment the progress bar by 1
-    pbar.close()  # Close the progress bar once the loop is finished
+    if PRIMER_TYPE == 'right':
+        logging.info("===============================================================================")
+        logging.info('MOVING LEFT...')
+        logging.info("===============================================================================")
+        pbar = tqdm.tqdm(total=(reference['start_pos'] - left_limit))
+        while reference['start_pos'] > left_limit + 1:
+            update_window(direction=-1)
+            pbar.update(1)  # Increment the progress bar by 1
+        pbar.close()  # Close the progress bar once the loop is finished
 
-    reference = init_ref
-    freq = calculate_probabilities(reference['sequences'])
-    logging.info("===============================================================================")
-    logging.info('The reference sequence has been reset to the initial value')
-    logging.info('\n')
-    logging.info("===============================================================================")
-    logging.info('MOVING RIGHT...')
-    logging.info("===============================================================================")
-    pbar = tqdm.tqdm(total=(left_limit-reference['start_pos']))
-    while reference['start_pos'] < right_limit - step:
-        update_window(direction=step)
-        pbar.update(1)  # Increment the progress bar by 1
-    pbar.close()  # Close the progress bar once the loop is finished
-    logging.info("===============================================================================")
+    # # reference = dict(init_ref)
+    # reference.clear()
+    # reference = init_ref.copy()
+    #
+    # reference['freq'] = calculate_probabilities(reference['sequences'])
+    # logging.info("===============================================================================")
+    # logging.info('The reference sequence has been reset to the initial value')
+    # logging.info('\n')
+    if PRIMER_TYPE == 'left':
+        logging.info("===============================================================================")
+        logging.info('MOVING RIGHT...')
+        logging.info("===============================================================================")
+        pbar = tqdm.tqdm(total=(left_limit-reference['start_pos']))
+        while reference['start_pos'] < right_limit - 1:
+            update_window(direction=1)
+            pbar.update(1)  # Increment the progress bar by 1
+        pbar.close()  # Close the progress bar once the loop is finished
+        logging.info("===============================================================================")
 
     logging.info('Moving slicing window has been finished!')
 
@@ -711,13 +748,13 @@ def highest_probability_sequence(df):
     return ''.join(df[column].idxmax() for column in df.columns)
 
 
-def plot_probabilities(df, reference, title=None):
+def plot_probabilities(reference, title=None):
     # Set the colors for each letter
     colors = {'A': 'red', 'C': 'green', 'G': 'blue', 'T': 'orange'}
 
     # Plot the probabilities for each letter
-    for letter in df.index:
-        plt.plot(df.loc[letter], label=letter, color=colors[letter])
+    for letter in reference['freq'].index:
+        plt.plot(reference['freq'].loc[letter], label=letter, color=colors[letter])
 
     # Increase the width of the plot to 20
     fig = plt.gcf()
@@ -729,8 +766,8 @@ def plot_probabilities(df, reference, title=None):
     plt.ylabel('Probability')
 
     # Add labels with the titles of the letters with the highest probability
-    for column in df.columns:
-        max_letter, max_prob = df[column].idxmax(), df[column].max()
+    for column in reference['freq'].columns:
+        max_letter, max_prob = reference['freq'][column].idxmax(), reference['freq'][column].max()
         plt.text(int(column), max_prob, max_letter, ha='center', va='bottom', fontsize=10)
 
     ref_seq = reference['seq']
