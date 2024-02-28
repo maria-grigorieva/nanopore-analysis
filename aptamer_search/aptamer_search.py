@@ -1,6 +1,5 @@
 import pandas as pd
 import logging
-import matplotlib.pyplot as plt
 import numpy as np
 from Bio import SeqIO
 from Bio.Seq import Seq
@@ -9,12 +8,12 @@ import argparse
 import os
 from fuzzywuzzy import fuzz
 import tqdm
-from PIL import Image, ImageDraw
 from itertools import combinations
 import uuid
 from itertools import product
 from Bio import pairwise2
 from Bio.pairwise2 import format_alignment
+from visualization import plot_probabilities
 
 
 # Define the argument parser
@@ -52,10 +51,10 @@ TOTAL_LENGTH = APTAMER_LENGTH + PRIMER_LENGTH * 2
 
 FILE_PATH = args.input
 OUTPUT_DIR = f'../results/{args.output}'
-PLOTS_DIR = f'{OUTPUT_DIR}/plots/references'
+# PLOTS_DIR = f'{OUTPUT_DIR}/plots/references'
 LOG_FILE = f'{OUTPUT_DIR}/app.log'
 os.makedirs(OUTPUT_DIR, exist_ok=True)
-os.makedirs(PLOTS_DIR, exist_ok=True)
+# os.makedirs(PLOTS_DIR, exist_ok=True)
 
 REFERENCE = args.ref
 REFERENCE_LENGTH = len(REFERENCE)
@@ -88,8 +87,9 @@ GLUED_PRIMERS = []
 logging.basicConfig(level=logging.INFO, filename=LOG_FILE, filemode="w",
                     format="%(asctime)s %(levelname)s %(message)s")
 
+TREE = []
+BIFURCATIONS = []
 APTAMERS = []
-CYCLES = 0
 
 def main():
 
@@ -97,30 +97,39 @@ def main():
 
     print_info()
 
-    seq_list = get_sequences(clean=CLEAN)
+    seq_list = get_sequences()
     logging.info(f'{len(seq_list)} sequences have been read!')
     # REFERENCE, REFERENCE_LENGTH, START_POS = search_best_primer(seq_list)
 
-    # todo: remove whole sequences with glued primers?
-    # seq_list = [s for s in seq_list if not glued_primers(s['sequence'], 9)]
-    # print(len(seq_list))
+    INIT_REFERENCE = initialize(seq_list, REFERENCE, str(Seq(PR).complement()[::-1][0:REFERENCE_LENGTH]), START_POS)
+    # first cycle
+    searching(INIT_REFERENCE, seq_list)
 
-    # result = ""
-    #
-    # while result is not None:
-    #     INIT_REFERENCE = initialize(seq_list)
-    #     result = searching(INIT_REFERENCE, seq_list, APTAMERS)
-    #     if result is not None:
-    #         APTAMERS.append(result)
+    # iterate over all detected bifurcations
+    for b in BIFURCATIONS:
+        logging.info('===============================================================================')
+        logging.info('===============================================================================')
+        logging.info(f'Next passage with bifurcation: {b}')
+        INIT_REFERENCE = initialize(seq_list, REFERENCE, str(Seq(PR).complement()[::-1][0:REFERENCE_LENGTH]), START_POS)
+        searching(INIT_REFERENCE, seq_list, b)
+        #print(BIFURCATIONS)
 
-    INIT_REFERENCE = initialize(seq_list)
-    result = searching(INIT_REFERENCE, seq_list)
-    APTAMERS.append(result)
+    logging.info('===============================================================================')
+    logging.info('===============================================================================')
+    logging.info('RESULTS:')
 
-def initialize(seq_list):
-    ref = {'seq': args.ref,
-          'complement': str(Seq(PR).complement()[::-1][0:REFERENCE_LENGTH]),
-          'start_pos': args.pos}
+    for i in list(set(APTAMERS)):
+        aptamer = i[:APTAMER_LENGTH] if PRIMER_TYPE == 'right' else i[:PRIMER_LENGTH]
+        primer = i[APTAMER_LENGTH:APTAMER_LENGTH + PRIMER_LENGTH] \
+            if PRIMER_TYPE == 'right' else i[PRIMER_LENGTH:PRIMER_LENGTH + APTAMER_LENGTH]
+        logging.info(f'{aptamer} -- {primer}')
+
+    pd.DataFrame(TREE).to_csv(f'{OUTPUT_DIR}/tree.csv')
+
+def initialize(seq_list, ref_name, complement, start_pos):
+    ref = {'seq': ref_name,
+          'complement': complement,
+          'start_pos': start_pos}
 
     ref['sequences'], \
         ref['scores'] = select_ref_sequences(seq_list, ref)
@@ -139,7 +148,16 @@ def merging_probabilities(probabilities):
                 pd.concat([merged_data[row], df.loc[row]], axis=1)
     return merged_data
 
-def searching(ref, seq_list):
+def searching(ref, seq_list, bifurcation=None):
+
+    # define output directory
+    ref_name = ref['seq'] if bifurcation is None else bifurcation['seq']
+    start_pos = ref['start_pos'] if bifurcation is None else bifurcation['start_pos']
+    output = f'{OUTPUT_DIR}/{ref_name}_{start_pos}'
+    plots_directory = f'{output}/shifts'
+    os.makedirs(output, exist_ok=True)
+    os.makedirs(plots_directory, exist_ok=True)
+
     probabilities = []
     weights_list = []
 
@@ -149,9 +167,6 @@ def searching(ref, seq_list):
     logging.info(f'''{len(ref['sequences'])} have been selected with 
                 {ref['seq']} at {ref['start_pos']}''')
 
-    # logging.info(f'''Calculating probabilities of the occurence of letters at each position...''')
-    # freq = calculate_probabilities(ref['sequences'])
-    # probabilities.append(freq)
     probabilities.append(ref['freq'])
 
     weights = calculate_weights(ref['scores'])
@@ -160,12 +175,12 @@ def searching(ref, seq_list):
     fname = f'''steps_{ref['seq']}'''
 
     if SAVE_FILES:
-        steps_writer = pd.ExcelWriter(f'{OUTPUT_DIR}/{fname}.xlsx')
+        steps_writer = pd.ExcelWriter(f'{output}/{fname}.xlsx')
         write_steps_excel(ref, steps_writer)
     else:
         steps_writer = None
 
-    plot_probabilities(ref)
+    plot_probabilities(ref, plots_directory)
 
     reference = ref
 
@@ -174,10 +189,11 @@ def searching(ref, seq_list):
         move_slicing_window(seq_list,
                             reference,
                             ref,
-                            # freq,
                             probabilities,
                             weights_list,
-                            steps_writer)
+                            steps_writer,
+                            bifurcation,
+                            plots_directory)
 
         if SAVE_FILES:
             steps_writer.close()
@@ -190,18 +206,20 @@ def searching(ref, seq_list):
         weights_df.reset_index(drop=True, inplace=True)
 
         logging.info(f'Calculating statistics...')
-        result = calculate_statistics(merged_data, ref, weights_df)
+        result = calculate_statistics(merged_data, ref, weights_df, output)
+        APTAMERS.append(result)
 
         return result
     except:
-        logging.warning('No more options')
+        logging.error('Moving slicing window has stopped!')
         return None
 
-def calculate_statistics(merged_data, ref, weights_df):
+def calculate_statistics(merged_data, ref, weights_df, output):
 
     fname = f'''output_{ref['seq']}'''
     if SAVE_FILES:
-        output_writer = pd.ExcelWriter(f'{OUTPUT_DIR}/{fname}.xlsx')
+        # output_writer = pd.ExcelWriter(f'{OUTPUT_DIR}/{fname}.xlsx')
+        output_writer = pd.ExcelWriter(f'{output}/{fname}.xlsx')
 
     final_composition_median, final_composition_low, final_composition_high = {}, {}, {}
 
@@ -238,9 +256,9 @@ def calculate_statistics(merged_data, ref, weights_df):
 
         output_writer.close()
 
-    result_25 = infer_sequence('0.25', final_composition_low_df, ref)
-    result_median = infer_sequence('median', final_composition_median_df, ref)
-    result_75 = infer_sequence('0.75', final_composition_high_df, ref)
+    result_median = infer_sequence('median', final_composition_median_df, ref, f'{output}/shifts')
+    result_75 = infer_sequence('0.75', final_composition_high_df, ref, f'{output}/shifts')
+
     return result_median
 
 def weighted_statistics(df_A, df_B, threshold=0.4):
@@ -289,9 +307,9 @@ def print_info():
     logging.info("===============================================================================")
 
 
-def infer_sequence(probability, df, init_ref):
+def infer_sequence(probability, df, init_ref, output):
     result = highest_probability_sequence(df.copy())
-    plot_probabilities({'seq': result, 'start_pos': 0, 'freq': df}, probability)
+    plot_probabilities({'seq': result, 'start_pos': 0, 'freq': df}, output, probability)
     print_result(result, init_ref, probability)
     return result
 
@@ -319,7 +337,7 @@ def generate_fastq_file(data, output_filename):
     return output_filename
 
 
-def get_sequences(clean=True, mode='complete'):
+def get_sequences():
     """
     Merge sequences from a specified directory
     """
@@ -338,7 +356,7 @@ def get_sequences(clean=True, mode='complete'):
             results.append({'sequence': sequence,
                         'score': score})
     logging.info(f'{len(results)} sequences have been read!')
-    create_image_with_colored_sequence(results[0:1000], f'{OUTPUT_DIR}/internal.png')
+    # create_image_with_colored_sequence(results[0:1000], f'{OUTPUT_DIR}/internal.png')
     generate_fastq_file(results, f'{OUTPUT_DIR}/internal.fastq')
     logging.info(f'Internal fastq file has been written.')
 
@@ -418,9 +436,6 @@ def select_ref_sequences(seq_list, reference):
 
         matches = np.array([list(s) for s in matches]) if len(matches) > 0 else None
         scores = np.array([list(s) for s in scores]) if len(matches) > 0 else None
-        # TODO: return back after debugging!!!!
-        if PHRED_SCORES:
-            matches = bad_phred_score_remover(matches, scores)
     else:
         fuzzy_matches = list(
             set([item['sequence'][i:i + REFERENCE_LENGTH] for item in seq_list for i in range(len(item['sequence']) - REFERENCE_LENGTH + 1)
@@ -444,13 +459,6 @@ def bad_sequences_remover(matches, scores, threshold=15):
             # Remove the corresponding element in 'matches' using the same index
             matches = np.delete(matches, i, axis=0)
     return matches, scores
-
-def bad_phred_score_remover(matches, scores, threshold=15):
-    for i, subarray in enumerate(scores):
-        for j, nucleotide in enumerate(subarray):
-            if nucleotide <= threshold:
-                matches[i][j] = None
-    return matches
 
 def split_sequence(sequence, score, indices):
     splitted = []
@@ -507,18 +515,14 @@ def scale_dataframe(df):
     # Get the minimum and maximum values for each column
     min_vals = df.min()
     max_vals = df.max()
-
     # Calculate the range for each column
     ranges = max_vals - min_vals
-
     # Scale the values of the DataFrame from 0 to 1
     scaled_df = (df - min_vals) / ranges
-
     return scaled_df
 
 
 def calculate_weights(scores):
-
     return pd.DataFrame(scores.mean(axis=0)).T
 
 
@@ -546,7 +550,28 @@ def get_combinations(length):
                 combinations.append(''.join(combo))
     return combinations
 
-def update_reference(seq_list, reference, direction = -1):
+
+def bifurcation_search(references):
+    max_number = max([r['hits'] for r in references])
+    # Find numbers that differ from the max by less than an order of magnitude
+    try:
+        bifurcation = max([{'seq': r['seq'],
+                              'start_pos': r['start_pos'],
+                              'complement': r['complement'],
+                              'n_seqs': r['n_seqs'],
+                              'primer_score': r['primer_score'],
+                              'hits': r['hits']} for r in references if
+                             max_number / r['hits'] > 1 and max_number / r['hits'] < 10 and r['hits'] > 10],
+                            key=lambda x: x['hits'])
+        logging.warning('Bifurcation has been found:')
+        for key, value in bifurcation.items():
+            logging.warning(f'{key}: {value}')
+        return bifurcation
+    except:
+        logging.warning('No bifurcations have been found at this shift.')
+        return None
+
+def update_reference(seq_list, reference, bifurcation, direction = -1):
     """
     Shift the current reference sequence to the left or right and generate a new matrix (numpy array)
     by extracting sequences from the array of all sequences.
@@ -561,12 +586,12 @@ def update_reference(seq_list, reference, direction = -1):
        'n_seq' : number of extracted sequences
     """
     new_start = reference['start_pos'] + direction
-    index = {
-        (-1, 'left'): new_start,
-        (-1, 'right'): new_start - PRIMER_LENGTH,
-        (1, 'left'): new_start + REFERENCE_LENGTH - 1,
-        (1, 'right'): new_start + REFERENCE_LENGTH - PRIMER_LENGTH - 1
-    }.get((direction, PRIMER_TYPE), 0)
+    # index = {
+    #     (-1, 'left'): new_start,
+    #     (-1, 'right'): new_start - PRIMER_LENGTH,
+    #     (1, 'left'): new_start + REFERENCE_LENGTH - 1,
+    #     (1, 'right'): new_start + REFERENCE_LENGTH - PRIMER_LENGTH - 1
+    # }.get((direction, PRIMER_TYPE), 0)
 
     # letters_probability = df[index].to_dict()
     refs = []
@@ -583,18 +608,71 @@ def update_reference(seq_list, reference, direction = -1):
             new_ref['sequences'], \
             new_ref['scores'] = len(sequences), sequences, scores
             n_seqs = new_ref['n_seqs']
-
-            #freq = calculate_probabilities(sequences)
-            #inference = highest_probability_sequence(freq)
             new_ref['primer_score'] = evaluate_sequences_correctness(ref_name, sequences, scores)
-            # new_ref['correctness'] = pairwise_similarity(sequences, scores)
-            #new_ref['correctness'] = fuzz.ratio(inference[START_POS-PRIMER_LENGTH:], PR)
             correctness = new_ref['primer_score']
             new_ref['hits'] = n_seqs * correctness
+            new_ref['letter'] = letter
+            new_ref['passed'] = False
+
             refs.append(new_ref)
+
         except Exception as e:
+            logging.warning(f'No sequences with reference {ref_name} as position {new_start} have been found')
             continue
-    res = max(refs, key=lambda x: x['hits'])
+
+    if bifurcation is None:
+        alternative = bifurcation_search(refs)
+        if alternative is not None:
+            passed = False
+            for item in BIFURCATIONS:
+                if item['seq'] == alternative['seq'] and item['start_pos'] == alternative['start_pos']:
+                    passed = True
+                    break
+            if not passed:
+                BIFURCATIONS.append(alternative)
+
+    # first try to find item in bifurcation, if it is not a bifurcation, then get max
+    res = {}
+    if bifurcation is not None:
+        for item in refs:
+            if item['seq'] == bifurcation['seq'] and item['start_pos'] == bifurcation['start_pos']:
+                res = item
+                break
+    if not res:
+        res = max(refs, key=lambda x: x['hits'])
+
+    # add refernces to TREE
+    selected_keys = ['letter', 'seq', 'complement', 'start_pos', 'passed', 'n_seqs', 'primer_score', 'hits']
+    # define current path
+    path = bifurcation['seq'] + '_' + str(bifurcation['start_pos']) if bifurcation is not None \
+           else 'initial'
+    # get route number
+    if len(TREE) == 0:
+        prev_seq, prev_start_pos = REFERENCE, START_POS
+    else:
+        x = next((item['seq'] for item in reversed(TREE) if item.get('passed', False) and item['path'] == path), None)
+        prev_seq = x if x is not None else REFERENCE
+        y = next((item['start_pos'] for item in reversed(TREE) if item.get('passed', False) and item['path'] == path), None)
+        prev_start_pos = y if y is not None else START_POS
+
+    if bifurcation is None:
+        for ref in refs:
+            tmp = {key: value for key, value in ref.items() if key in selected_keys}
+            tmp['path'] = path
+            tmp['prev_seq'] = prev_seq
+            tmp['prev_start_pos'] = prev_start_pos
+            tmp['passed'] = True if tmp['seq'] == res['seq'] and tmp['start_pos'] == res['start_pos'] \
+                else False
+            TREE.append(tmp)
+    else:
+        for ref in refs:
+            tmp = {key: value for key, value in ref.items() if key in selected_keys}
+            tmp['path'] = path
+            tmp['prev_seq'] = prev_seq
+            tmp['prev_start_pos'] = prev_start_pos
+            tmp['passed'] = True if tmp['seq'] == res['seq'] and tmp['start_pos'] == res['start_pos'] \
+                else False
+            TREE.append(tmp)
 
     logging.info(
         f'''{len(res['sequences'])} have been selected with {res['seq']} at {res['start_pos']}''')
@@ -610,7 +688,6 @@ def evaluate_sequences_correctness(ref_name, sequences, scores):
         s = ''.join(row)
         position = 0 if PRIMER_TYPE == 'left' else APTAMER_LENGTH
         primer = PR if PRIMER_TYPE == 'right' else PL
-        #seq.append(calculate_similarity(s[position:position+PRIMER_LENGTH], primer)/100)
         seq.append(pairwise_similarity(s[position:position+PRIMER_LENGTH], primer, aligned_primers)/100)
         # seq.append(round(fuzz.ratio(s[position:position+PRIMER_LENGTH], primer)/100,4))
         sc.append(1 - np.mean([pow(10, -i/10) for i in scores[idx][position:position+PRIMER_LENGTH]]))
@@ -626,11 +703,6 @@ def evaluate_sequences_correctness(ref_name, sequences, scores):
                 logging.info(s)
             break
     return primer_score
-
-def calculate_similarity(string1, string2):
-    count_same = sum(c1 == c2 for c1, c2 in zip(string1, string2))
-    percentage_similarity = (count_same / len(string1))*100
-    return percentage_similarity
 
 def pairwise_similarity(string1, string2, aligned_primers):
     alignments = pairwise2.align.globalxx(string1, string2)
@@ -653,8 +725,6 @@ def write_steps_excel(reference, writer=None):
                                                    index=True,
                                                    header=True)
 
-
-
 def maximized_probabilities(probabilities, threshold=0.90):
 
     max_length = 0
@@ -676,17 +746,19 @@ def maximized_probabilities(probabilities, threshold=0.90):
 
 def move_slicing_window(seq_list, reference, init_ref,
                         #freq,
-                        probabilities, weights_list, writer):
+                        probabilities, weights_list, writer, bifurcation, output):
     left_limit = PRIMER_LENGTH if PRIMER_TYPE == 'right' else 0
     right_limit = TOTAL_LENGTH - REFERENCE_LENGTH - 1 if PRIMER_TYPE == 'right' \
         else TOTAL_LENGTH - PRIMER_LENGTH - REFERENCE_LENGTH - 1
 
-    def update_window(direction):
+    def update_window(bifurcation, direction):
         nonlocal reference
         if FLEXIBLE_SHIFTS:
             p = reference['freq'].max().tolist()
             high_seq = highest_probability_sequence(reference['freq'])
             max_p = maximized_probabilities(p)
+            if PRIMER_TYPE == 'right' and direction == -1:
+                max_p = [num for num in max_p if num + PRIMER_LENGTH > left_limit + 1]
             if len(max_p) > 0:
                 shift = np.min(max_p) if direction < 0 else np.max(max_p)
                 new_ref = high_seq[shift:shift+REFERENCE_LENGTH] if direction < 0 else \
@@ -697,6 +769,7 @@ def move_slicing_window(seq_list, reference, init_ref,
                     reference['start_pos'] = new_start_pos
         reference = update_reference(seq_list,
                                      reference,
+                                     bifurcation,
                                      direction=direction)
         reference['freq'] = calculate_probabilities(reference['sequences'])
         weights = calculate_weights(reference['scores'])
@@ -707,7 +780,7 @@ def move_slicing_window(seq_list, reference, init_ref,
         probabilities.append(reference['freq'])
         weights_list.append(weights)
 
-        plot_probabilities(reference)
+        plot_probabilities(reference, output)
 
     if PRIMER_TYPE == 'right':
         logging.info("===============================================================================")
@@ -715,11 +788,10 @@ def move_slicing_window(seq_list, reference, init_ref,
         logging.info("===============================================================================")
         pbar = tqdm.tqdm(total=(reference['start_pos'] - left_limit))
         while reference['start_pos'] > left_limit + 1:
-            update_window(direction=-1)
+            update_window(bifurcation, direction=-1)
             pbar.update(1)  # Increment the progress bar by 1
         pbar.close()  # Close the progress bar once the loop is finished
 
-    # # reference = dict(init_ref)
     # reference.clear()
     # reference = init_ref.copy()
     #
@@ -733,7 +805,7 @@ def move_slicing_window(seq_list, reference, init_ref,
         logging.info("===============================================================================")
         pbar = tqdm.tqdm(total=(left_limit-reference['start_pos']))
         while reference['start_pos'] < right_limit - 1:
-            update_window(direction=1)
+            update_window(bifurcation, direction=1)
             pbar.update(1)  # Increment the progress bar by 1
         pbar.close()  # Close the progress bar once the loop is finished
         logging.info("===============================================================================")
@@ -746,76 +818,6 @@ def highest_probability_sequence(df):
     Choose sequences that have the greatest likelihood of letters appearing in all positions
     """
     return ''.join(df[column].idxmax() for column in df.columns)
-
-
-def plot_probabilities(reference, title=None):
-    # Set the colors for each letter
-    colors = {'A': 'red', 'C': 'green', 'G': 'blue', 'T': 'orange'}
-
-    # Plot the probabilities for each letter
-    for letter in reference['freq'].index:
-        plt.plot(reference['freq'].loc[letter], label=letter, color=colors[letter])
-
-    # Increase the width of the plot to 20
-    fig = plt.gcf()
-    fig.set_size_inches(20, fig.get_figheight())
-
-    # Set the legend, x-label, and y-label
-    plt.legend()
-    plt.xlabel('Position')
-    plt.ylabel('Probability')
-
-    # Add labels with the titles of the letters with the highest probability
-    for column in reference['freq'].columns:
-        max_letter, max_prob = reference['freq'][column].idxmax(), reference['freq'][column].max()
-        plt.text(int(column), max_prob, max_letter, ha='center', va='bottom', fontsize=10)
-
-    ref_seq = reference['seq']
-    ref_pos = reference['start_pos']
-    figname = f'{PLOTS_DIR}/{ref_pos}:{ref_seq}.png' if title is None else f'{PLOTS_DIR}/{ref_seq}-{title}.png'
-    plt.savefig(figname)
-    plt.clf()
-    plt.cla()
-    plt.close()
-
-def create_image_with_colored_sequence(records, output_file, limit=200):
-    width = 20  # Width of each character box
-    height = 20  # Height of each character box
-    padding = 5  # Padding between character boxes
-    max_score = 40  # Maximum score
-
-    total_width = limit * (width + padding)
-    total_height = height * len(records)
-
-    image = Image.new("RGB", (total_width, total_height), "white")
-    draw = ImageDraw.Draw(image)
-
-    y = 0
-
-    for record in records:
-        sequence = record['sequence']
-        scores = record['score']
-
-        x = 0
-
-        for i, score in enumerate(scores):
-            character = sequence[i]
-
-            # Calculate the color based on the score
-            normalized_score = score / max_score  # Normalize the score between 0 and 1
-            red = int(255 * (1 - normalized_score))
-            green = int(255 * normalized_score)
-            color = (red, green, 0)
-
-            # Draw the character box with the corresponding color
-            draw.rectangle([x, y, x + width, y + height], fill=color)
-            draw.text((x+8, y), character, fill="black")
-
-            x += width + padding
-
-        y += height
-
-    image.save(output_file)
 
 def find_repeatable_substrings(string):
     repeatable_substrings = set()
