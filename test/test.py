@@ -7,8 +7,70 @@ from Bio import pairwise2
 from Bio.pairwise2 import format_alignment
 from Bio import Align
 from Bio.SeqRecord import SeqRecord
+import pandas as pd
+import plotly.graph_objects as go
 
-filename = "../data_samples/barcodes/FAP38830_pass_barcode04_bcc3428d_0.fastq"
+df = pd.read_csv('../results/barcode05_GGCTTCTGG_51_TREE_80/tree.csv')
+
+# df = df[(df['path'] == 'CCAGCACCT_42')]
+# df['source'] = df['prev_seq'].astype(str) + df['prev_start_pos'].astype(str)
+# df['target'] = df['seq'].astype(str) + df['start_pos'].astype(str)
+df['source'] = df['prev_seq'].astype(str).str[0] + df['prev_start_pos'].astype(str)
+df['target'] = df['letter'].astype(str) + df['start_pos'].astype(str)
+
+labels = list(set(np.concatenate((df['source'].values, df['target'].values), axis=0)))
+# Assign each element with its index
+indexed_arr = [(index, value) for index, value in enumerate(labels)]
+# def indexing(row, indexed_arr):
+#     index = next((index for index, value in indexed_arr if value == row['source']), None)
+#     return index
+df['source_index'] = df.apply(lambda row: next((index for index, value in indexed_arr if value == row['source']), None), axis=1)
+df['target_index'] = df.apply(lambda row: next((index for index, value in indexed_arr if value == row['target']), None), axis=1)
+
+# Initialize sources, targets, and values
+sources = df['source_index'].values[::-1]
+targets = df['target_index'].values[::-1]
+values = df['hits'].values[::-1]
+
+# Create Sankey diagram
+fig = go.Figure(data=[go.Sankey(
+    node=dict(
+        pad=15,
+        thickness=20,
+        line=dict(color="black", width=0.5),
+        label=labels
+    ),
+    link=dict(
+        source=sources,
+        target=targets,
+        value=values
+    )
+)])
+
+fig.update_layout(title_text="Sankey Diagram")
+fig.show()
+
+
+#
+#
+#
+# fig = go.Figure(data=[go.Sankey(
+#     node = dict(
+#       pad = 15,
+#       thickness = 20,
+#       line = dict(color = "black", width = 0.5),
+#       label = df['seq'].values,
+#       color = "blue"
+#     ),
+#     link = dict(
+#       source = df['prev_start_pos'].values, # indices correspond to labels, eg A1, A2, A1, B1, ...
+#       target = df['start_pos'].values,
+#       value = df['hits'].values
+#   ))])
+#
+# fig.update_layout(title_text="Basic Sankey Diagram", font_size=10)
+# fig.show()
+
 
 # count = 0
 # for rec in SeqIO.parse(filename, "fastq"):
@@ -23,17 +85,6 @@ filename = "../data_samples/barcodes/FAP38830_pass_barcode04_bcc3428d_0.fastq"
 # count = SeqIO.write(good_reads, "good_quality.fastq", "fastq")
 # print("Saved %i reads" % count)
 
-errors = []
-phred_qualities = []
-for rec in SeqIO.parse(filename, "fastq"):
-    #phred_quality = np.mean(rec.letter_annotations["phred_quality"])
-    phred_qualities.append(rec.letter_annotations["phred_quality"])
-    errors.append([10 ** ( -item / 10) for item in rec.letter_annotations["phred_quality"]])
-    #error = 10 ** (- phred_quality / 10)
-    # errors.append(error)
-    # print(rec.seq)
-
-print(phred_qualities)
 # print(errors)
 # sizes = [len(rec.seq) for rec in SeqIO.parse(filename, "fastq")]
 # len(sizes), min(sizes), max(sizes)
