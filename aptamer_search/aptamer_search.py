@@ -110,6 +110,8 @@ def main():
         logging.info('===============================================================================')
         logging.info('===============================================================================')
         logging.info(f'Next passage with bifurcation: {b}')
+        # bifurcation as the initial reference
+        #INIT_REFERENCE = initialize(seq_list, b['seq'], b['complement'], b['start_pos'])
         INIT_REFERENCE = initialize(seq_list, REFERENCE, str(Seq(PR).complement()[::-1][0:REFERENCE_LENGTH]), START_POS)
         searching(INIT_REFERENCE, seq_list, b)
         #print(BIFURCATIONS)
@@ -118,11 +120,21 @@ def main():
     logging.info('===============================================================================')
     logging.info('RESULTS:')
 
-    for i in list(set(APTAMERS)):
-        aptamer = i[:APTAMER_LENGTH] if PRIMER_TYPE == 'right' else i[:PRIMER_LENGTH]
-        primer = i[APTAMER_LENGTH:APTAMER_LENGTH + PRIMER_LENGTH] \
-            if PRIMER_TYPE == 'right' else i[PRIMER_LENGTH:PRIMER_LENGTH + APTAMER_LENGTH]
-        logging.info(f'{aptamer} -- {primer}')
+    # for i in list(set(APTAMERS)):
+    #     aptamer = i[:APTAMER_LENGTH] if PRIMER_TYPE == 'right' else i[:PRIMER_LENGTH]
+    #     primer = i[APTAMER_LENGTH:APTAMER_LENGTH + PRIMER_LENGTH] \
+    #         if PRIMER_TYPE == 'right' else i[PRIMER_LENGTH:PRIMER_LENGTH + APTAMER_LENGTH]
+    #     logging.info(f'{aptamer} -- {primer}')
+    for item in APTAMERS:
+        aptamer = item['aptamer'][:APTAMER_LENGTH] if PRIMER_TYPE == 'right' else item['aptamer'][:PRIMER_LENGTH]
+        primer = item['aptamer'][APTAMER_LENGTH:APTAMER_LENGTH + PRIMER_LENGTH] \
+            if PRIMER_TYPE == 'right' else item['aptamer'][PRIMER_LENGTH:PRIMER_LENGTH + APTAMER_LENGTH]
+        stats = item['stats_volume']
+        primer_value = PR if PRIMER_TYPE == 'right' else PL
+        tmp = []
+        similarity_score = pairwise_similarity(primer_value, primer, tmp)
+        logging.info(f'{aptamer} -- {primer} based on average statistics of {stats} sequences')
+        logging.info(f'with primer similarity score = {similarity_score}')
 
     pd.DataFrame(TREE).to_csv(f'{OUTPUT_DIR}/tree.csv')
 
@@ -150,6 +162,8 @@ def merging_probabilities(probabilities):
 
 def searching(ref, seq_list, bifurcation=None):
 
+    stats_volume = []
+
     # define output directory
     ref_name = ref['seq'] if bifurcation is None else bifurcation['seq']
     start_pos = ref['start_pos'] if bifurcation is None else bifurcation['start_pos']
@@ -172,6 +186,8 @@ def searching(ref, seq_list, bifurcation=None):
     weights = calculate_weights(ref['scores'])
     weights_list.append(weights)
 
+    stats_volume.append(len(ref['sequences']))
+
     fname = f'''steps_{ref['seq']}'''
 
     if SAVE_FILES:
@@ -193,7 +209,8 @@ def searching(ref, seq_list, bifurcation=None):
                             weights_list,
                             steps_writer,
                             bifurcation,
-                            plots_directory)
+                            plots_directory,
+                            stats_volume)
 
         if SAVE_FILES:
             steps_writer.close()
@@ -207,7 +224,8 @@ def searching(ref, seq_list, bifurcation=None):
 
         logging.info(f'Calculating statistics...')
         result = calculate_statistics(merged_data, ref, weights_df, output)
-        APTAMERS.append(result)
+        APTAMERS.append({'aptamer': result,
+                        'stats_volume': np.mean(stats_volume)})
 
         return result
     except:
@@ -221,7 +239,7 @@ def calculate_statistics(merged_data, ref, weights_df, output):
         # output_writer = pd.ExcelWriter(f'{OUTPUT_DIR}/{fname}.xlsx')
         output_writer = pd.ExcelWriter(f'{output}/{fname}.xlsx')
 
-    final_composition_median, final_composition_low, final_composition_high = {}, {}, {}
+    final_composition_median, final_composition_high = {}, {}
 
     for row in ['A', 'C', 'G', 'T']:
         # Transpose the merged data for the row
@@ -237,16 +255,16 @@ def calculate_statistics(merged_data, ref, weights_df, output):
         if SAVE_FILES:
             stats.to_excel(output_writer, sheet_name=f"{row}-stats", index=True, header=True)
 
-        final_composition_low[row] = stats.iloc[4].to_numpy()
+        # final_composition_low[row] = stats.iloc[4].to_numpy()
         final_composition_median[row] = stats.iloc[5].to_numpy()
         final_composition_high[row] = stats.iloc[6].to_numpy()
-
-    final_composition_low_df = pd.DataFrame(final_composition_low).T
+    #
+    # final_composition_low_df = pd.DataFrame(final_composition_low).T
     final_composition_median_df = pd.DataFrame(final_composition_median).T
     final_composition_high_df = pd.DataFrame(final_composition_high).T
 
-    dfs = [final_composition_low_df, final_composition_median_df, final_composition_high_df]
-    sheet_names = ["final-composition-low", "final-composition-median", "final-composition-high"]
+    dfs = [final_composition_median_df, final_composition_high_df]
+    sheet_names = ["final-composition-median", "final-composition-high"]
 
     if SAVE_FILES:
         for df, sheet_name in zip(dfs, sheet_names):
@@ -555,18 +573,28 @@ def bifurcation_search(references):
     max_number = max([r['hits'] for r in references])
     # Find numbers that differ from the max by less than an order of magnitude
     try:
-        bifurcation = max([{'seq': r['seq'],
+        # bifurcation = max([{'seq': r['seq'],
+        #                       'start_pos': r['start_pos'],
+        #                       'complement': r['complement'],
+        #                       'n_seqs': r['n_seqs'],
+        #                       'primer_score': r['primer_score'],
+        #                       'hits': r['hits']} for r in references if
+        #                      max_number / r['hits'] > 1 and max_number / r['hits'] < 10 and r['hits'] > 10],
+        #                     key=lambda x: x['hits'])
+        bifurcations = [{'seq': r['seq'],
                               'start_pos': r['start_pos'],
                               'complement': r['complement'],
                               'n_seqs': r['n_seqs'],
                               'primer_score': r['primer_score'],
                               'hits': r['hits']} for r in references if
-                             max_number / r['hits'] > 1 and max_number / r['hits'] < 10 and r['hits'] > 10],
-                            key=lambda x: x['hits'])
-        logging.warning('Bifurcation has been found:')
-        for key, value in bifurcation.items():
-            logging.warning(f'{key}: {value}')
-        return bifurcation
+                             max_number / r['hits'] >= 1 and max_number / r['hits'] <= 5 and r['hits'] > 10
+                        and r['hits'] != max_number]
+        if len(bifurcations) > 0:
+            logging.warning('Bifurcations have been found:')
+            for b in bifurcations:
+                logging.warning(f'''{b['seq']} at position {b['start_pos']} with {b['n_seqs']} sequences, {b['primer_score']} primer similarity score 
+                                    and {b['hits']} hits''')
+        return bifurcations
     except:
         logging.warning('No bifurcations have been found at this shift.')
         return None
@@ -620,16 +648,17 @@ def update_reference(seq_list, reference, bifurcation, direction = -1):
             logging.warning(f'No sequences with reference {ref_name} as position {new_start} have been found')
             continue
 
-    if bifurcation is None:
-        alternative = bifurcation_search(refs)
-        if alternative is not None:
+    # if bifurcation is None:
+    alternative = bifurcation_search(refs)
+    if alternative is not None:
+        for a in alternative:
             passed = False
             for item in BIFURCATIONS:
-                if item['seq'] == alternative['seq'] and item['start_pos'] == alternative['start_pos']:
+                if item['seq'] == a['seq'] and item['start_pos'] == a['start_pos']:
                     passed = True
                     break
             if not passed:
-                BIFURCATIONS.append(alternative)
+                BIFURCATIONS.append(a)
 
     # first try to find item in bifurcation, if it is not a bifurcation, then get max
     res = {}
@@ -725,7 +754,7 @@ def write_steps_excel(reference, writer=None):
                                                    index=True,
                                                    header=True)
 
-def maximized_probabilities(probabilities, threshold=0.90):
+def maximized_probabilities(probabilities, threshold=0.85):
 
     max_length = 0
     start_index = 0
@@ -746,7 +775,7 @@ def maximized_probabilities(probabilities, threshold=0.90):
 
 def move_slicing_window(seq_list, reference, init_ref,
                         #freq,
-                        probabilities, weights_list, writer, bifurcation, output):
+                        probabilities, weights_list, writer, bifurcation, output, stats_volume):
     left_limit = PRIMER_LENGTH if PRIMER_TYPE == 'right' else 0
     right_limit = TOTAL_LENGTH - REFERENCE_LENGTH - 1 if PRIMER_TYPE == 'right' \
         else TOTAL_LENGTH - PRIMER_LENGTH - REFERENCE_LENGTH - 1
@@ -773,6 +802,7 @@ def move_slicing_window(seq_list, reference, init_ref,
                                      direction=direction)
         reference['freq'] = calculate_probabilities(reference['sequences'])
         weights = calculate_weights(reference['scores'])
+        stats_volume.append(reference['n_seqs'])
 
         if SAVE_FILES:
             write_steps_excel(reference, writer)
