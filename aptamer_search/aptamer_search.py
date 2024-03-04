@@ -109,10 +109,11 @@ def main():
     for b in BIFURCATIONS:
         logging.info('===============================================================================')
         logging.info('===============================================================================')
-        logging.info(f'Next passage with bifurcation: {b}')
+        filtered_b = {key: value for key, value in b.items() if key in ['seq', 'start_pos']}
+        logging.info(f'Next passage with bifurcation: {filtered_b}')
         # bifurcation as the initial reference
-        #INIT_REFERENCE = initialize(seq_list, b['seq'], b['complement'], b['start_pos'])
-        INIT_REFERENCE = initialize(seq_list, REFERENCE, str(Seq(PR).complement()[::-1][0:REFERENCE_LENGTH]), START_POS)
+        INIT_REFERENCE = initialize(seq_list, b['seq'], b['complement'], b['start_pos'])
+        # INIT_REFERENCE = initialize(seq_list, REFERENCE, str(Seq(PR).complement()[::-1][0:REFERENCE_LENGTH]), START_POS)
         searching(INIT_REFERENCE, seq_list, b)
         #print(BIFURCATIONS)
 
@@ -581,13 +582,8 @@ def bifurcation_search(references):
         #                       'hits': r['hits']} for r in references if
         #                      max_number / r['hits'] > 1 and max_number / r['hits'] < 10 and r['hits'] > 10],
         #                     key=lambda x: x['hits'])
-        bifurcations = [{'seq': r['seq'],
-                              'start_pos': r['start_pos'],
-                              'complement': r['complement'],
-                              'n_seqs': r['n_seqs'],
-                              'primer_score': r['primer_score'],
-                              'hits': r['hits']} for r in references if
-                             max_number / r['hits'] >= 1 and max_number / r['hits'] <= 5 and r['hits'] > 10
+        bifurcations = [r for r in references if
+                             max_number / r['hits'] >= 1 and max_number / r['hits'] <= 10 and r['hits'] > 10
                         and r['hits'] != max_number]
         if len(bifurcations) > 0:
             logging.warning('Bifurcations have been found:')
@@ -672,36 +668,37 @@ def update_reference(seq_list, reference, bifurcation, direction = -1):
 
     # add refernces to TREE
     selected_keys = ['letter', 'seq', 'complement', 'start_pos', 'passed', 'n_seqs', 'primer_score', 'hits']
-    # define current path
-    path = bifurcation['seq'] + '_' + str(bifurcation['start_pos']) if bifurcation is not None \
-           else 'initial'
-    # get route number
-    if len(TREE) == 0:
-        prev_seq, prev_start_pos = REFERENCE, START_POS
-    else:
-        x = next((item['seq'] for item in reversed(TREE) if item.get('passed', False) and item['path'] == path), None)
-        prev_seq = x if x is not None else REFERENCE
-        y = next((item['start_pos'] for item in reversed(TREE) if item.get('passed', False) and item['path'] == path), None)
-        prev_start_pos = y if y is not None else START_POS
+    if direction == -1:
+        # define current path
+        path = bifurcation['seq'] + '_' + str(bifurcation['start_pos']) if bifurcation is not None \
+               else 'initial'
+        # get route number
+        if len(TREE) == 0:
+            prev_seq, prev_start_pos = REFERENCE, START_POS
+        else:
+            x = next((item['seq'] for item in reversed(TREE) if item.get('passed', False) and item['path'] == path), None)
+            prev_seq = x if x is not None else REFERENCE
+            y = next((item['start_pos'] for item in reversed(TREE) if item.get('passed', False) and item['path'] == path), None)
+            prev_start_pos = y if y is not None else START_POS
 
-    if bifurcation is None:
-        for ref in refs:
-            tmp = {key: value for key, value in ref.items() if key in selected_keys}
-            tmp['path'] = path
-            tmp['prev_seq'] = prev_seq
-            tmp['prev_start_pos'] = prev_start_pos
-            tmp['passed'] = True if tmp['seq'] == res['seq'] and tmp['start_pos'] == res['start_pos'] \
-                else False
-            TREE.append(tmp)
-    else:
-        for ref in refs:
-            tmp = {key: value for key, value in ref.items() if key in selected_keys}
-            tmp['path'] = path
-            tmp['prev_seq'] = prev_seq
-            tmp['prev_start_pos'] = prev_start_pos
-            tmp['passed'] = True if tmp['seq'] == res['seq'] and tmp['start_pos'] == res['start_pos'] \
-                else False
-            TREE.append(tmp)
+        if bifurcation is None:
+            for ref in refs:
+                tmp = {key: value for key, value in ref.items() if key in selected_keys}
+                tmp['path'] = path
+                tmp['prev_seq'] = prev_seq
+                tmp['prev_start_pos'] = prev_start_pos
+                tmp['passed'] = True if tmp['seq'] == res['seq'] and tmp['start_pos'] == res['start_pos'] \
+                    else False
+                TREE.append(tmp)
+        else:
+            for ref in refs:
+                tmp = {key: value for key, value in ref.items() if key in selected_keys}
+                tmp['path'] = path
+                tmp['prev_seq'] = prev_seq
+                tmp['prev_start_pos'] = prev_start_pos
+                tmp['passed'] = True if tmp['seq'] == res['seq'] and tmp['start_pos'] == res['start_pos'] \
+                    else False
+                TREE.append(tmp)
 
     logging.info(
         f'''{len(res['sequences'])} have been selected with {res['seq']} at {res['start_pos']}''')
@@ -788,12 +785,17 @@ def move_slicing_window(seq_list, reference, init_ref,
             max_p = maximized_probabilities(p)
             if PRIMER_TYPE == 'right' and direction == -1:
                 max_p = [num for num in max_p if num + PRIMER_LENGTH > left_limit + 1]
+            elif PRIMER_TYPE == 'right' and direction == 1:
+                max_p = [num for num in max_p if num + PRIMER_LENGTH < right_limit - 1]
             if len(max_p) > 0:
-                shift = np.min(max_p) if direction < 0 else np.max(max_p)
-                new_ref = high_seq[shift:shift+REFERENCE_LENGTH] if direction < 0 else \
-                                   high_seq[shift:shift + REFERENCE_LENGTH]
-                new_start_pos = shift + PRIMER_LENGTH if direction < 0 else shift + PRIMER_LENGTH - REFERENCE_LENGTH
-                if direction < 0 or PRIMER_LENGTH + APTAMER_LENGTH - new_start_pos > REFERENCE_LENGTH:
+                shift = np.min(max_p) if direction == -1 else np.max(max_p)
+                new_ref = high_seq[shift:shift+REFERENCE_LENGTH] if direction == -1 else \
+                                   high_seq[shift:REFERENCE_LENGTH + shift]
+                new_start_pos = shift + PRIMER_LENGTH if direction == -1 else shift + PRIMER_LENGTH
+                if direction == -1 or PRIMER_LENGTH + APTAMER_LENGTH - new_start_pos > REFERENCE_LENGTH:
+                    reference['seq'] = new_ref
+                    reference['start_pos'] = new_start_pos
+                if direction == 1:
                     reference['seq'] = new_ref
                     reference['start_pos'] = new_start_pos
         reference = update_reference(seq_list,
@@ -812,33 +814,33 @@ def move_slicing_window(seq_list, reference, init_ref,
 
         plot_probabilities(reference, output)
 
-    if PRIMER_TYPE == 'right':
-        logging.info("===============================================================================")
-        logging.info('MOVING LEFT...')
-        logging.info("===============================================================================")
-        pbar = tqdm.tqdm(total=(reference['start_pos'] - left_limit))
-        while reference['start_pos'] > left_limit + 1:
-            update_window(bifurcation, direction=-1)
-            pbar.update(1)  # Increment the progress bar by 1
-        pbar.close()  # Close the progress bar once the loop is finished
+    # if PRIMER_TYPE == 'right':
+    logging.info("===============================================================================")
+    logging.info('MOVING LEFT...')
+    logging.info("===============================================================================")
+    pbar = tqdm.tqdm(total=(reference['start_pos'] - left_limit))
+    while reference['start_pos'] > left_limit + 1:
+        update_window(bifurcation, direction=-1)
+        pbar.update(1)  # Increment the progress bar by 1
+    pbar.close()  # Close the progress bar once the loop is finished
 
-    # reference.clear()
-    # reference = init_ref.copy()
-    #
-    # reference['freq'] = calculate_probabilities(reference['sequences'])
-    # logging.info("===============================================================================")
-    # logging.info('The reference sequence has been reset to the initial value')
-    # logging.info('\n')
-    if PRIMER_TYPE == 'left':
-        logging.info("===============================================================================")
-        logging.info('MOVING RIGHT...')
-        logging.info("===============================================================================")
-        pbar = tqdm.tqdm(total=(left_limit-reference['start_pos']))
-        while reference['start_pos'] < right_limit - 1:
-            update_window(bifurcation, direction=1)
-            pbar.update(1)  # Increment the progress bar by 1
-        pbar.close()  # Close the progress bar once the loop is finished
-        logging.info("===============================================================================")
+    reference.clear()
+    reference = init_ref.copy()
+
+    #reference['freq'] = calculate_probabilities(reference['sequences'])
+    logging.info("===============================================================================")
+    logging.info('The reference sequence has been reset to the initial value')
+    logging.info('\n')
+    # if PRIMER_TYPE == 'left':
+    logging.info("===============================================================================")
+    logging.info('MOVING RIGHT...')
+    logging.info("===============================================================================")
+    pbar = tqdm.tqdm(total=(right_limit - 1 -reference['start_pos']))
+    while reference['start_pos'] < right_limit - 1:
+        update_window(bifurcation, direction=1)
+        pbar.update(1)  # Increment the progress bar by 1
+    pbar.close()  # Close the progress bar once the loop is finished
+    logging.info("===============================================================================")
 
     logging.info('Moving slicing window has been finished!')
 
