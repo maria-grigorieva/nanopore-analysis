@@ -668,37 +668,54 @@ def update_reference(seq_list, reference, bifurcation, direction = -1):
 
     # add refernces to TREE
     selected_keys = ['letter', 'seq', 'complement', 'start_pos', 'passed', 'n_seqs', 'primer_score', 'hits']
-    if direction == -1:
-        # define current path
-        path = bifurcation['seq'] + '_' + str(bifurcation['start_pos']) if bifurcation is not None \
-               else 'initial'
-        # get route number
-        if len(TREE) == 0:
+    # define route ID as a combination of reference name and start position
+    path = bifurcation['seq'] + '_' + str(bifurcation['start_pos']) if bifurcation is not None \
+           else 'initial'
+    # define previous shift
+    if len(TREE) == 0:
+        if bifurcation is None:
             prev_seq, prev_start_pos = REFERENCE, START_POS
         else:
+            prev_seq, prev_start_pos = bifurcation['seq'], bifurcation['start_pos']
+    else:
+        # get the last reference from the same path ID
+        if direction == -1:
             x = next((item['seq'] for item in reversed(TREE) if item.get('passed', False) and item['path'] == path), None)
-            prev_seq = x if x is not None else REFERENCE
+            prev_seq = x if x is not None else bifurcation['seq']
             y = next((item['start_pos'] for item in reversed(TREE) if item.get('passed', False) and item['path'] == path), None)
-            prev_start_pos = y if y is not None else START_POS
+            prev_start_pos = y if y is not None else bifurcation['start_pos']
+        elif direction == 1:
+            x = next((item['prev_seq'] for item in TREE if item.get('passed', False) and item['path'] == path),
+                     None)
+            prev_seq = x if x is not None else bifurcation['seq']
+            y = next(
+                (item['prev_start_pos'] for item in TREE if item.get('passed', False) and item['path'] == path),
+                None)
+            prev_start_pos = y if y is not None else bifurcation['start_pos']
 
-        if bifurcation is None:
-            for ref in refs:
-                tmp = {key: value for key, value in ref.items() if key in selected_keys}
+    def add_bifurcation(refs):
+        for ref in refs:
+            tmp = {key: value for key, value in ref.items() if key in selected_keys}
+            if direction == -1:
                 tmp['path'] = path
                 tmp['prev_seq'] = prev_seq
                 tmp['prev_start_pos'] = prev_start_pos
                 tmp['passed'] = True if tmp['seq'] == res['seq'] and tmp['start_pos'] == res['start_pos'] \
                     else False
-                TREE.append(tmp)
-        else:
-            for ref in refs:
-                tmp = {key: value for key, value in ref.items() if key in selected_keys}
+            elif direction == 1:
                 tmp['path'] = path
-                tmp['prev_seq'] = prev_seq
-                tmp['prev_start_pos'] = prev_start_pos
-                tmp['passed'] = True if tmp['seq'] == res['seq'] and tmp['start_pos'] == res['start_pos'] \
+                tmp['prev_seq'] = tmp['seq']
+                tmp['prev_start_pos'] = tmp['start_pos']
+                tmp['seq'] = prev_seq
+                tmp['start_pos'] = prev_start_pos
+                tmp['passed'] = True if tmp['prev_seq'] == res['seq'] and tmp['prev_start_pos'] == res['start_pos'] \
                     else False
-                TREE.append(tmp)
+            TREE.append(tmp)
+
+    if bifurcation is None:
+        add_bifurcation(refs)
+    else:
+        add_bifurcation(refs)
 
     logging.info(
         f'''{len(res['sequences'])} have been selected with {res['seq']} at {res['start_pos']}''')
