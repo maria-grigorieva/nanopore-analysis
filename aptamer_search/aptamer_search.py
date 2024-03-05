@@ -680,16 +680,20 @@ def update_reference(seq_list, reference, bifurcation, direction = -1):
     else:
         # get the last reference from the same path ID
         if direction == -1:
-            x = next((item['seq'] for item in reversed(TREE) if item.get('passed', False) and item['path'] == path), None)
+            x = next((item['seq'] for item in reversed(TREE) if item.get('passed', False) and item['path'] == path \
+                     and item['direction'] == 'left'), None)
             prev_seq = x if x is not None else bifurcation['seq']
-            y = next((item['start_pos'] for item in reversed(TREE) if item.get('passed', False) and item['path'] == path), None)
+            y = next((item['start_pos'] for item in reversed(TREE) if item.get('passed', False) and item['path'] == path \
+                      and item['direction'] == 'left'), None)
             prev_start_pos = y if y is not None else bifurcation['start_pos']
         elif direction == 1:
-            x = next((item['prev_seq'] for item in TREE if item.get('passed', False) and item['path'] == path),
+            x = next((item['prev_seq'] for item in reversed(TREE) if item.get('passed', False) and item['path'] == path \
+                      and item['direction'] == 'right'),
                      None)
             prev_seq = x if x is not None else bifurcation['seq']
             y = next(
-                (item['prev_start_pos'] for item in TREE if item.get('passed', False) and item['path'] == path),
+                (item['prev_start_pos'] for item in reversed(TREE) if item.get('passed', False) and item['path'] == path \
+                    and item['direction'] == 'right'),
                 None)
             prev_start_pos = y if y is not None else bifurcation['start_pos']
 
@@ -702,6 +706,7 @@ def update_reference(seq_list, reference, bifurcation, direction = -1):
                 tmp['prev_start_pos'] = prev_start_pos
                 tmp['passed'] = True if tmp['seq'] == res['seq'] and tmp['start_pos'] == res['start_pos'] \
                     else False
+                tmp['direction'] = 'left'
             elif direction == 1:
                 tmp['path'] = path
                 tmp['prev_seq'] = tmp['seq']
@@ -710,6 +715,7 @@ def update_reference(seq_list, reference, bifurcation, direction = -1):
                 tmp['start_pos'] = prev_start_pos
                 tmp['passed'] = True if tmp['prev_seq'] == res['seq'] and tmp['prev_start_pos'] == res['start_pos'] \
                     else False
+                tmp['direction'] = 'right'
             TREE.append(tmp)
 
     if bifurcation is None:
