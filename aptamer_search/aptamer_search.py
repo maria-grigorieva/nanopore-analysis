@@ -12,8 +12,9 @@ from itertools import combinations
 import uuid
 from itertools import product
 from Bio import pairwise2
-from Bio.pairwise2 import format_alignment
 from visualization import plot_probabilities
+from Bio.pairwise2 import format_alignment
+
 
 
 # Define the argument parser
@@ -199,12 +200,12 @@ def searching(ref, seq_list, bifurcation=None):
 
     plot_probabilities(ref, plots_directory)
 
-    reference = ref
+    # reference = ref
 
     logging.info('Moving slicing window...')
     try:
         move_slicing_window(seq_list,
-                            reference,
+                            ref.copy(),
                             ref,
                             probabilities,
                             weights_list,
@@ -402,7 +403,7 @@ def extract_segment(sequence, score, pattern, matches, scores, remove_incorrect=
                 position = 0 if PRIMER_TYPE == 'left' else APTAMER_LENGTH
                 primer = PR if PRIMER_TYPE == 'right' else PL
                 #if calculate_similarity(s[position:position+PRIMER_LENGTH],primer) >= threshold:
-                #if pairwise_similarity(s[position:position + PRIMER_LENGTH], primer) >= threshold:
+                # if pairwise_similarity(s[position:position + PRIMER_LENGTH], primer, None) >= threshold:
                 if fuzz.ratio(s[position:position+PRIMER_LENGTH],primer) >= threshold:
                     matches.append(s)
                     scores.append(score[i['start']:i['end']])
@@ -641,7 +642,7 @@ def update_reference(seq_list, reference, bifurcation, direction = -1):
             refs.append(new_ref)
 
         except Exception as e:
-            logging.warning(f'No sequences with reference {ref_name} as position {new_start} have been found')
+            logging.warning(f'{ref_name}: No sequences with reference {ref_name} as position {new_start} have been found')
             continue
 
     # if bifurcation is None:
@@ -666,6 +667,72 @@ def update_reference(seq_list, reference, bifurcation, direction = -1):
     if not res:
         res = max(refs, key=lambda x: x['hits'])
 
+    build_tree(bifurcation, direction, refs, res)
+
+    # # add refernces to TREE
+    # selected_keys = ['letter', 'seq', 'complement', 'start_pos', 'passed', 'n_seqs', 'primer_score', 'hits']
+    # # define route ID as a combination of reference name and start position
+    # path = bifurcation['seq'] + '_' + str(bifurcation['start_pos']) if bifurcation is not None \
+    #        else 'initial'
+    # # define previous shift
+    # if len(TREE) == 0:
+    #     if bifurcation is None:
+    #         prev_seq, prev_start_pos = REFERENCE, START_POS
+    #     else:
+    #         prev_seq, prev_start_pos = bifurcation['seq'], bifurcation['start_pos']
+    # else:
+    #     # get the last reference from the same path ID
+    #     if direction == -1:
+    #         x = next((item['seq'] for item in reversed(TREE) if item.get('passed', False) and item['path'] == path \
+    #                  and item['direction'] == 'left'), None)
+    #         prev_seq = x if x is not None else bifurcation['seq']
+    #         y = next((item['start_pos'] for item in reversed(TREE) if item.get('passed', False) and item['path'] == path \
+    #                   and item['direction'] == 'left'), None)
+    #         prev_start_pos = y if y is not None else bifurcation['start_pos']
+    #     elif direction == 1:
+    #         x = next((item['prev_seq'] for item in reversed(TREE) if item.get('passed', False) and item['path'] == path \
+    #                   and item['direction'] == 'right'),
+    #                  None)
+    #         prev_seq = x if x is not None else bifurcation['seq']
+    #         y = next(
+    #             (item['prev_start_pos'] for item in reversed(TREE) if item.get('passed', False) and item['path'] == path \
+    #                 and item['direction'] == 'right'),
+    #             None)
+    #         prev_start_pos = y if y is not None else bifurcation['start_pos']
+    #
+    # def add_bifurcation(refs):
+    #     for ref in refs:
+    #         tmp = {key: value for key, value in ref.items() if key in selected_keys}
+    #         if direction == -1:
+    #             tmp['path'] = path
+    #             tmp['prev_seq'] = prev_seq
+    #             tmp['prev_start_pos'] = prev_start_pos
+    #             tmp['passed'] = True if tmp['seq'] == res['seq'] and tmp['start_pos'] == res['start_pos'] \
+    #                 else False
+    #             tmp['direction'] = 'left'
+    #         elif direction == 1:
+    #             tmp['path'] = path
+    #             tmp['prev_seq'] = tmp['seq']
+    #             tmp['prev_start_pos'] = tmp['start_pos']
+    #             tmp['seq'] = prev_seq
+    #             tmp['start_pos'] = prev_start_pos
+    #             tmp['passed'] = True if tmp['prev_seq'] == res['seq'] and tmp['prev_start_pos'] == res['start_pos'] \
+    #                 else False
+    #             tmp['direction'] = 'right'
+    #         TREE.append(tmp)
+    #
+    # if bifurcation is None:
+    #     add_bifurcation(refs)
+    # else:
+    #     add_bifurcation(refs)
+
+    logging.info(
+        f'''{len(res['sequences'])} have been selected with {res['seq']} at {res['start_pos']}''')
+    logging.info('*******************************************************************************')
+
+    return res
+
+def build_tree(bifurcation, direction, refs, res):
     # add refernces to TREE
     selected_keys = ['letter', 'seq', 'complement', 'start_pos', 'passed', 'n_seqs', 'primer_score', 'hits']
     # define route ID as a combination of reference name and start position
@@ -680,22 +747,25 @@ def update_reference(seq_list, reference, bifurcation, direction = -1):
     else:
         # get the last reference from the same path ID
         if direction == -1:
-            x = next((item['seq'] for item in reversed(TREE) if item.get('passed', False) and item['path'] == path \
+            x = next((item['seq'] for item in reversed(TREE) if item.get('passed', True) and item['path'] == path \
                      and item['direction'] == 'left'), None)
             prev_seq = x if x is not None else bifurcation['seq']
-            y = next((item['start_pos'] for item in reversed(TREE) if item.get('passed', False) and item['path'] == path \
+            y = next((item['start_pos'] for item in reversed(TREE) if item.get('passed', True) and item['path'] == path \
                       and item['direction'] == 'left'), None)
             prev_start_pos = y if y is not None else bifurcation['start_pos']
         elif direction == 1:
-            x = next((item['prev_seq'] for item in reversed(TREE) if item.get('passed', False) and item['path'] == path \
+            x = next(([item['prev_seq'],item['prev_start_pos']] for item in reversed(TREE) if item.get('passed', True) and item['path'] == path \
                       and item['direction'] == 'right'),
                      None)
-            prev_seq = x if x is not None else bifurcation['seq']
-            y = next(
-                (item['prev_start_pos'] for item in reversed(TREE) if item.get('passed', False) and item['path'] == path \
-                    and item['direction'] == 'right'),
-                None)
-            prev_start_pos = y if y is not None else bifurcation['start_pos']
+            if x is not None:
+                prev_seq = x if x is not None else bifurcation['seq']
+                y = next(
+                    (item['prev_start_pos'] for item in reversed(TREE) if item.get('passed', True) and item['path'] == path \
+                        and item['direction'] == 'right'),
+                    None)
+                prev_start_pos = y if y is not None else bifurcation['start_pos']
+            else:
+                prev_seq, prev_start_pos = REFERENCE, START_POS
 
     def add_bifurcation(refs):
         for ref in refs:
@@ -723,45 +793,40 @@ def update_reference(seq_list, reference, bifurcation, direction = -1):
     else:
         add_bifurcation(refs)
 
-    logging.info(
-        f'''{len(res['sequences'])} have been selected with {res['seq']} at {res['start_pos']}''')
-    logging.info('*******************************************************************************')
-
-    return res
 
 def evaluate_sequences_correctness(ref_name, sequences, scores):
     seq = []
-    sc = []
+    #sc = []
     aligned_primers = []
+    position = 0 if PRIMER_TYPE == 'left' else APTAMER_LENGTH
+    primer = PR if PRIMER_TYPE == 'right' else PL
     for idx, row in enumerate(sequences):
         s = ''.join(row)
-        position = 0 if PRIMER_TYPE == 'left' else APTAMER_LENGTH
-        primer = PR if PRIMER_TYPE == 'right' else PL
         seq.append(pairwise_similarity(s[position:position+PRIMER_LENGTH], primer, aligned_primers)/100)
-        # seq.append(round(fuzz.ratio(s[position:position+PRIMER_LENGTH], primer)/100,4))
-        sc.append(1 - np.mean([pow(10, -i/10) for i in scores[idx][position:position+PRIMER_LENGTH]]))
-        res = [np.mean([a,b]) for a, b in zip(seq, sc)]
+        #seq.append(round(fuzz.ratio(s[position:position+PRIMER_LENGTH], primer)/100,4))
+        #sc.append(1 - np.mean([pow(10, -i/10) for i in scores[idx][position:position+PRIMER_LENGTH]]))
+        #res = [np.mean([a,b]) for a, b in zip(seq, sc)]
     mean_sim_score = round(np.mean([i.score for i in aligned_primers]))
     n_seqs = len(sequences)
-    primer_score = np.mean(res)
+    primer_score = np.mean(seq)
     hits = n_seqs * primer_score
     logging.info(f'{ref_name}: Number of sequences is {n_seqs}, correctness = {primer_score}, hits = {hits}')
-    for i in aligned_primers:
-        if i.score == mean_sim_score:
-            for s in format_alignment(*i).split('\n'):
-                logging.info(s)
-            break
+    # Find the element with the closest 'c' value to the average
+    closest_element = min(aligned_primers, key=lambda x: abs(x.score - mean_sim_score))
+    for s in format_alignment(*closest_element).split('\n'):
+        logging.info(s)
     return primer_score
 
-def pairwise_similarity(string1, string2, aligned_primers):
-    alignments = pairwise2.align.globalxx(string1, string2)
-    mean_score = np.mean([i.score for i in alignments])
+def pairwise_similarity(string1, primer, aligned_primers=None):
+    alignments = pairwise2.align.globalms(string1, primer, 1, -1, -2, -.5)
+    max_score = np.max([i.score for i in alignments])
     # save alignments for logging
-    for a in alignments:
-        if a.score == mean_score:
-            aligned_primers.append(a)
-            break
-    return mean_score * 100 / len(string1)
+    if aligned_primers is not None:
+        for a in alignments:
+            if a.score == max_score:
+                aligned_primers.append(a)
+                break
+    return max_score * 100 / len(string1)
 
 def write_steps_excel(reference, writer=None):
     reference['freq'].to_excel(writer,
