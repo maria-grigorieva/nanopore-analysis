@@ -765,7 +765,10 @@ def build_tree(bifurcation, direction, refs, res):
                     None)
                 prev_start_pos = y if y is not None else bifurcation['start_pos']
             else:
-                prev_seq, prev_start_pos = REFERENCE, START_POS
+                if bifurcation is None:
+                    prev_seq, prev_start_pos = REFERENCE, START_POS
+                else:
+                    prev_seq, prev_start_pos = bifurcation['seq'], bifurcation['start_pos']
 
     def add_bifurcation(refs):
         for ref in refs:
