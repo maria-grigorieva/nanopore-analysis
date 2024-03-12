@@ -35,7 +35,8 @@ args_info = [
     ['-w', '--weights', bool, 'Take into account nucleotide phred scores', False],
     ['-ph', '--cutoff', int, 'Phred score cut off', 15],
     ['-cl', '--initial_cleaning', bool, 'Initial cleaning of sequences from glued primers', True],
-    ['-flex', '--flexible_shifts', bool, 'Flexible slicing window (improves performance, but decreases accuracy)', False]
+    ['-flex', '--flexible_shifts', bool, 'Flexible slicing window (improves performance, but decreases accuracy)', False],
+    ['-nbif', '--number_of_bifurcations', int, 'Max number of bifurcations', 10]
 ]
 
 # Add arguments to the parser
@@ -68,6 +69,7 @@ PHRED_SCORES = args.weights
 PHRED_CUTOFF = args.cutoff
 CLEAN = args.initial_cleaning
 FLEXIBLE_SHIFTS = args.flexible_shifts
+N_BIFURCATIONS = args.number_of_bifurcations
 
 # Set all variations of primers
 R_PL, R_PR = PL[::-1], PR[::-1]
@@ -107,38 +109,54 @@ def main():
     searching(INIT_REFERENCE, seq_list)
 
     # iterate over all detected bifurcations
-    for b in BIFURCATIONS:
-        logging.info('===============================================================================')
-        logging.info('===============================================================================')
-        filtered_b = {key: value for key, value in b.items() if key in ['seq', 'start_pos']}
-        logging.info(f'Next passage with bifurcation: {filtered_b}')
-        # bifurcation as the initial reference
-        INIT_REFERENCE = initialize(seq_list, b['seq'], b['complement'], b['start_pos'])
-        # INIT_REFERENCE = initialize(seq_list, REFERENCE, str(Seq(PR).complement()[::-1][0:REFERENCE_LENGTH]), START_POS)
-        searching(INIT_REFERENCE, seq_list, b)
-        #print(BIFURCATIONS)
+    for idx,b in enumerate(BIFURCATIONS):
+        if idx <= N_BIFURCATIONS:
+            logging.info('===============================================================================')
+            logging.info('===============================================================================')
+            filtered_b = {key: value for key, value in b.items() if key in ['seq', 'start_pos']}
+            logging.info(f'Next passage with bifurcation: {filtered_b}')
+            # bifurcation as the initial reference
+            INIT_REFERENCE = initialize(seq_list, b['seq'], b['complement'], b['start_pos'])
+            # INIT_REFERENCE = initialize(seq_list, REFERENCE, str(Seq(PR).complement()[::-1][0:REFERENCE_LENGTH]), START_POS)
+            searching(INIT_REFERENCE, seq_list, b)
+            #print(BIFURCATIONS)
 
     logging.info('===============================================================================')
     logging.info('===============================================================================')
     logging.info('RESULTS:')
 
-    # for i in list(set(APTAMERS)):
-    #     aptamer = i[:APTAMER_LENGTH] if PRIMER_TYPE == 'right' else i[:PRIMER_LENGTH]
-    #     primer = i[APTAMER_LENGTH:APTAMER_LENGTH + PRIMER_LENGTH] \
-    #         if PRIMER_TYPE == 'right' else i[PRIMER_LENGTH:PRIMER_LENGTH + APTAMER_LENGTH]
-    #     logging.info(f'{aptamer} -- {primer}')
+    APTAMERS = filter_aptamers()
+
     for item in APTAMERS:
         aptamer = item['aptamer'][:APTAMER_LENGTH] if PRIMER_TYPE == 'right' else item['aptamer'][:PRIMER_LENGTH]
         primer = item['aptamer'][APTAMER_LENGTH:APTAMER_LENGTH + PRIMER_LENGTH] \
             if PRIMER_TYPE == 'right' else item['aptamer'][PRIMER_LENGTH:PRIMER_LENGTH + APTAMER_LENGTH]
         stats = item['stats_volume']
-        primer_value = PR if PRIMER_TYPE == 'right' else PL
-        tmp = []
-        similarity_score = pairwise_similarity(primer_value, primer, tmp)
-        logging.info(f'{aptamer} -- {primer} based on average statistics of {stats} sequences')
-        logging.info(f'with primer similarity score = {similarity_score}')
+        occurences = calculate_occurences(seq_list, aptamer)
+        if occurences > 0:
+            primer_value = PR if PRIMER_TYPE == 'right' else PL
+            tmp = []
+            similarity_score = pairwise_similarity(primer_value, primer, tmp)
+            logging.info(f'{aptamer} -- {primer} based on average statistics of {stats} sequences')
+            logging.info(f'with primer similarity score = {similarity_score} and {occurences} number of occurences.')
 
     pd.DataFrame(TREE).to_csv(f'{OUTPUT_DIR}/tree.csv')
+
+def calculate_occurences(seq_list, candidate):
+    return sum(i['sequence'].count(candidate) for i in seq_list)
+
+def filter_aptamers():
+    filtered_data = {}
+
+    for record in APTAMERS:
+        aptamer = record['aptamer'][:APTAMER_LENGTH] if PRIMER_TYPE == 'right' else record['aptamer'][:PRIMER_LENGTH]
+        stats = record['stats_volume']
+
+        if aptamer not in filtered_data or stats >= filtered_data[aptamer]["stats_volume"]:
+            filtered_data[aptamer] = record
+
+    return list(filtered_data.values())
+
 
 def initialize(seq_list, ref_name, complement, start_pos):
     ref = {'seq': ref_name,
@@ -241,7 +259,7 @@ def calculate_statistics(merged_data, ref, weights_df, output):
         # output_writer = pd.ExcelWriter(f'{OUTPUT_DIR}/{fname}.xlsx')
         output_writer = pd.ExcelWriter(f'{output}/{fname}.xlsx')
 
-    final_composition_median, final_composition_high = {}, {}
+    final_composition_median, final_composition_high, final_composition_max = {}, {}, {}
 
     for row in ['A', 'C', 'G', 'T']:
         # Transpose the merged data for the row
@@ -260,13 +278,16 @@ def calculate_statistics(merged_data, ref, weights_df, output):
         # final_composition_low[row] = stats.iloc[4].to_numpy()
         final_composition_median[row] = stats.iloc[5].to_numpy()
         final_composition_high[row] = stats.iloc[6].to_numpy()
+        final_composition_max[row] = stats.iloc[7].to_numpy()
     #
     # final_composition_low_df = pd.DataFrame(final_composition_low).T
     final_composition_median_df = pd.DataFrame(final_composition_median).T
     final_composition_high_df = pd.DataFrame(final_composition_high).T
+    final_composition_max_df = pd.DataFrame(final_composition_max).T
 
-    dfs = [final_composition_median_df, final_composition_high_df]
-    sheet_names = ["final-composition-median", "final-composition-high"]
+
+    dfs = [final_composition_median_df, final_composition_high_df, final_composition_max_df]
+    sheet_names = ["final-composition-median", "final-composition-high", "final-composition-max"]
 
     if SAVE_FILES:
         for df, sheet_name in zip(dfs, sheet_names):
@@ -278,8 +299,9 @@ def calculate_statistics(merged_data, ref, weights_df, output):
 
     result_median = infer_sequence('median', final_composition_median_df, ref, f'{output}/shifts')
     result_75 = infer_sequence('0.75', final_composition_high_df, ref, f'{output}/shifts')
+    result_max = infer_sequence('max', final_composition_max_df, ref, f'{output}/shifts')
 
-    return result_median
+    return result_max
 
 def weighted_statistics(df_A, df_B, threshold=0.4):
     statistics = {
@@ -324,6 +346,7 @@ def print_info():
     logging.info(f"Fuzzy search: {FUZZY}")
     logging.info(f"Take into account nucleotide phred scores: {PHRED_SCORES}")
     logging.info(f"Phred scores cutoff: {PHRED_CUTOFF}")
+    logging.info(f"Max number of bifurcations: {N_BIFURCATIONS}")
     logging.info("===============================================================================")
 
 
@@ -398,8 +421,6 @@ def extract_segment(sequence, score, pattern, matches, scores, remove_incorrect=
             s = sequence[i['start']:i['end']]
 
             if remove_incorrect:
-                # remove all sequences with wrong initial reference at its start position
-                # remove all incorrect sequences (i.e. AAAAAAA, ACACACACAC, GGGGGGGGG, ...)
                 position = 0 if PRIMER_TYPE == 'left' else APTAMER_LENGTH
                 primer = PR if PRIMER_TYPE == 'right' else PL
                 #if calculate_similarity(s[position:position+PRIMER_LENGTH],primer) >= threshold:
@@ -407,14 +428,6 @@ def extract_segment(sequence, score, pattern, matches, scores, remove_incorrect=
                 if fuzz.ratio(s[position:position+PRIMER_LENGTH],primer) >= threshold:
                     matches.append(s)
                     scores.append(score[i['start']:i['end']])
-                #
-                # incorrect_substrings = find_repeatable_substrings(s)
-                # if len(incorrect_substrings) > 0:
-                #     for s in incorrect_substrings:
-                #         result_string = s
-                #         for substring in incorrect_substrings:
-                #             result_string = result_string.replace(substring, "")
-
             else:
                 matches.append(s)
                 scores.append(score[i['start']:i['end']])
@@ -575,16 +588,8 @@ def bifurcation_search(references):
     max_number = max([r['hits'] for r in references])
     # Find numbers that differ from the max by less than an order of magnitude
     try:
-        # bifurcation = max([{'seq': r['seq'],
-        #                       'start_pos': r['start_pos'],
-        #                       'complement': r['complement'],
-        #                       'n_seqs': r['n_seqs'],
-        #                       'primer_score': r['primer_score'],
-        #                       'hits': r['hits']} for r in references if
-        #                      max_number / r['hits'] > 1 and max_number / r['hits'] < 10 and r['hits'] > 10],
-        #                     key=lambda x: x['hits'])
         bifurcations = [r for r in references if
-                             max_number / r['hits'] >= 1 and max_number / r['hits'] <= 10 and r['hits'] > 10
+                             max_number / r['hits'] >= 1 and max_number / r['hits'] < 5 and r['hits'] > 10
                         and r['hits'] != max_number]
         if len(bifurcations) > 0:
             logging.warning('Bifurcations have been found:')
@@ -668,63 +673,6 @@ def update_reference(seq_list, reference, bifurcation, direction = -1):
         res = max(refs, key=lambda x: x['hits'])
 
     build_tree(bifurcation, direction, refs, res)
-
-    # # add refernces to TREE
-    # selected_keys = ['letter', 'seq', 'complement', 'start_pos', 'passed', 'n_seqs', 'primer_score', 'hits']
-    # # define route ID as a combination of reference name and start position
-    # path = bifurcation['seq'] + '_' + str(bifurcation['start_pos']) if bifurcation is not None \
-    #        else 'initial'
-    # # define previous shift
-    # if len(TREE) == 0:
-    #     if bifurcation is None:
-    #         prev_seq, prev_start_pos = REFERENCE, START_POS
-    #     else:
-    #         prev_seq, prev_start_pos = bifurcation['seq'], bifurcation['start_pos']
-    # else:
-    #     # get the last reference from the same path ID
-    #     if direction == -1:
-    #         x = next((item['seq'] for item in reversed(TREE) if item.get('passed', False) and item['path'] == path \
-    #                  and item['direction'] == 'left'), None)
-    #         prev_seq = x if x is not None else bifurcation['seq']
-    #         y = next((item['start_pos'] for item in reversed(TREE) if item.get('passed', False) and item['path'] == path \
-    #                   and item['direction'] == 'left'), None)
-    #         prev_start_pos = y if y is not None else bifurcation['start_pos']
-    #     elif direction == 1:
-    #         x = next((item['prev_seq'] for item in reversed(TREE) if item.get('passed', False) and item['path'] == path \
-    #                   and item['direction'] == 'right'),
-    #                  None)
-    #         prev_seq = x if x is not None else bifurcation['seq']
-    #         y = next(
-    #             (item['prev_start_pos'] for item in reversed(TREE) if item.get('passed', False) and item['path'] == path \
-    #                 and item['direction'] == 'right'),
-    #             None)
-    #         prev_start_pos = y if y is not None else bifurcation['start_pos']
-    #
-    # def add_bifurcation(refs):
-    #     for ref in refs:
-    #         tmp = {key: value for key, value in ref.items() if key in selected_keys}
-    #         if direction == -1:
-    #             tmp['path'] = path
-    #             tmp['prev_seq'] = prev_seq
-    #             tmp['prev_start_pos'] = prev_start_pos
-    #             tmp['passed'] = True if tmp['seq'] == res['seq'] and tmp['start_pos'] == res['start_pos'] \
-    #                 else False
-    #             tmp['direction'] = 'left'
-    #         elif direction == 1:
-    #             tmp['path'] = path
-    #             tmp['prev_seq'] = tmp['seq']
-    #             tmp['prev_start_pos'] = tmp['start_pos']
-    #             tmp['seq'] = prev_seq
-    #             tmp['start_pos'] = prev_start_pos
-    #             tmp['passed'] = True if tmp['prev_seq'] == res['seq'] and tmp['prev_start_pos'] == res['start_pos'] \
-    #                 else False
-    #             tmp['direction'] = 'right'
-    #         TREE.append(tmp)
-    #
-    # if bifurcation is None:
-    #     add_bifurcation(refs)
-    # else:
-    #     add_bifurcation(refs)
 
     logging.info(
         f'''{len(res['sequences'])} have been selected with {res['seq']} at {res['start_pos']}''')
