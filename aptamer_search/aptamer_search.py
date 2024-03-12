@@ -34,9 +34,9 @@ args_info = [
     ['-c', '--complement', bool, 'Add complementary primer', False],
     ['-w', '--weights', bool, 'Take into account nucleotide phred scores', False],
     ['-ph', '--cutoff', int, 'Phred score cut off', 15],
-    ['-cl', '--initial_cleaning', bool, 'Initial cleaning of sequences from glued primers', True],
     ['-flex', '--flexible_shifts', bool, 'Flexible slicing window (improves performance, but decreases accuracy)', False],
-    ['-nbif', '--number_of_bifurcations', int, 'Max number of bifurcations', 10]
+    ['-nbif', '--number_of_bifurcations', int, 'Max number of bifurcations', 10],
+    ['-psim', '--primer_similarity', bool, 'Check correctness of primer position', False]
 ]
 
 # Add arguments to the parser
@@ -67,9 +67,9 @@ COMPLEMENT = args.complement
 SAVE_FILES = args.save
 PHRED_SCORES = args.weights
 PHRED_CUTOFF = args.cutoff
-CLEAN = args.initial_cleaning
 FLEXIBLE_SHIFTS = args.flexible_shifts
 N_BIFURCATIONS = args.number_of_bifurcations
+PRIMER_SIMILARITY = args.primer_similarity
 
 # Set all variations of primers
 R_PL, R_PR = PL[::-1], PR[::-1]
@@ -347,6 +347,7 @@ def print_info():
     logging.info(f"Take into account nucleotide phred scores: {PHRED_SCORES}")
     logging.info(f"Phred scores cutoff: {PHRED_CUTOFF}")
     logging.info(f"Max number of bifurcations: {N_BIFURCATIONS}")
+    logging.info(f"Check primer similarity: {PRIMER_SIMILARITY}")
     logging.info("===============================================================================")
 
 
@@ -457,7 +458,8 @@ def select_ref_sequences(seq_list, reference):
                             item['score'],
                             rf'.{{{left}}}{re.escape(seq)}.{{{right}}}',
                             matches,
-                            scores)
+                            scores,
+                            PRIMER_SIMILARITY)
 
             if COMPLEMENT:
                 comp_seq = reference['complement']
@@ -465,7 +467,8 @@ def select_ref_sequences(seq_list, reference):
                                 item['score'],
                                 rf'.{{{left}}}{re.escape(comp_seq)}.{{{right}}}',
                                 matches,
-                                scores)
+                                scores,
+                                PRIMER_SIMILARITY)
 
         matches = np.array([list(s) for s in matches]) if len(matches) > 0 else None
         scores = np.array([list(s) for s in scores]) if len(matches) > 0 else None
@@ -480,7 +483,8 @@ def select_ref_sequences(seq_list, reference):
                                 item['score'],
                                 rf'.{{{left}}}{re.escape(fuz)}.{{{right}}}',
                                 matches,
-                                scores)
+                                scores,
+                                PRIMER_SIMILARITY)
         matches = np.array([list(s) for s in matches]) if len(matches) > 0 else None
         scores = np.array([list(s) for s in scores]) if len(matches) > 0 else None
     return matches, scores
