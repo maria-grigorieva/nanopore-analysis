@@ -94,11 +94,11 @@ TREE = []
 BIFURCATIONS = []
 APTAMERS = []
 
-def main():
+def main(args):
 
     get_glued_primers_combinations(length=7)
 
-    print_info()
+    print_info(vars(args))
 
     seq_list = get_sequences()
     logging.info(f'{len(seq_list)} sequences have been read!')
@@ -323,31 +323,16 @@ def weighted_statistics(df_A, df_B, threshold=0.4):
     return pd.DataFrame(statistics).T
 
 
-def print_info():
+def print_info(args):
     # Print out the values of all the arguments
     logging.info("CONFIGURATION PARAMETERS:")
     logging.info("===============================================================================")
-    logging.info(f"Length of an aptamer: {APTAMER_LENGTH}")
-    logging.info(f"Length of a primer: {PRIMER_LENGTH}")
-    logging.info(f"Left Primer: {PL}")
-    logging.info(f"Right Primer: {PR}")
-    logging.info(f"Reversed Left Primer: {R_PL}")
-    logging.info(f"Reversed Right Primer: {R_PR}")
-    logging.info(f"Complementaty Left Primer: {C_PL}")
-    logging.info(f"Complementary Right Primer: {C_PR}")
-    logging.info(f"Complementaty Reversed Left Primer: {RC_PL}")
-    logging.info(f"Complementary Reversed Right Primer: {RC_PR}")
-    logging.info(f"Input file: {FILE_PATH}")
-    logging.info(f"Directory for the output: {OUTPUT_DIR}")
-    logging.info(f"Initial reference length: {REFERENCE_LENGTH}")
-    logging.info(f"Initial reference sequence: {REFERENCE}")
-    logging.info(f"Start position of the initial reference sequence: {START_POS}")
-    logging.info(f"Type of a primer for searching: {PRIMER_TYPE}")
-    logging.info(f"Fuzzy search: {FUZZY}")
-    logging.info(f"Take into account nucleotide phred scores: {PHRED_SCORES}")
-    logging.info(f"Phred scores cutoff: {PHRED_CUTOFF}")
-    logging.info(f"Max number of bifurcations: {N_BIFURCATIONS}")
-    logging.info(f"Check primer similarity: {PRIMER_SIMILARITY}")
+    for k,v in args.items():
+        logging.info(f"{k}: {v}")
+    for p in PRIMERS:
+        p_type = p['primer_type']
+        p_value = p['primer_value']
+        logging.info(f"{p_type}: {p_value}")
     logging.info("===============================================================================")
 
 
@@ -620,14 +605,7 @@ def update_reference(seq_list, reference, bifurcation, direction = -1):
        'n_seq' : number of extracted sequences
     """
     new_start = reference['start_pos'] + direction
-    # index = {
-    #     (-1, 'left'): new_start,
-    #     (-1, 'right'): new_start - PRIMER_LENGTH,
-    #     (1, 'left'): new_start + REFERENCE_LENGTH - 1,
-    #     (1, 'right'): new_start + REFERENCE_LENGTH - PRIMER_LENGTH - 1
-    # }.get((direction, PRIMER_TYPE), 0)
 
-    # letters_probability = df[index].to_dict()
     refs = []
     for letter in ['A','C','G','T']:
         new_ref = {'seq': letter + reference['seq'][:-1] if direction == -1 else reference['seq'][1:] + letter,
@@ -692,12 +670,14 @@ def build_tree(bifurcation, direction, refs, res):
            else 'initial'
     # define previous shift
     if len(TREE) == 0:
+        # prev_seq, prev_start_pos = (REFERENCE, START_POS) if bifurcation is None else (
+        # bifurcation['seq'], bifurcation['start_pos'])
+        #
         if bifurcation is None:
             prev_seq, prev_start_pos = REFERENCE, START_POS
         else:
             prev_seq, prev_start_pos = bifurcation['seq'], bifurcation['start_pos']
     else:
-        # get the last reference from the same path ID
         if direction == -1:
             x = next((item['seq'] for item in reversed(TREE) if item.get('passed', True) and item['path'] == path \
                      and item['direction'] == 'left'), None)
@@ -814,7 +794,6 @@ def maximized_probabilities(probabilities, threshold=0.85):
     return list(range(start_index, end_index + 1))
 
 def move_slicing_window(seq_list, reference, init_ref,
-                        #freq,
                         probabilities, weights_list, writer, bifurcation, output, stats_volume):
     left_limit = PRIMER_LENGTH if PRIMER_TYPE == 'right' else 0
     right_limit = TOTAL_LENGTH - REFERENCE_LENGTH - 1 if PRIMER_TYPE == 'right' \
@@ -894,19 +873,6 @@ def highest_probability_sequence(df):
     """
     return ''.join(df[column].idxmax() for column in df.columns)
 
-def find_repeatable_substrings(string):
-    repeatable_substrings = set()
-    # Find repeatable characters
-    repeatable_characters = re.findall(r'((\w)\2{5,})', string)
-    repeatable_substrings.update([substring[0] for substring in repeatable_characters])
-    # Find repeatable bigrams
-    repeatable_bigrams = re.findall(r'((\w{2})\2{4,})', string)
-    repeatable_substrings.update([substring[0] for substring in repeatable_bigrams])
-    # Find repeatable trigrams
-    repeatable_trigrams = re.findall(r'((\w{3})\2{3,})', string)
-    repeatable_substrings.update([substring[0] for substring in repeatable_trigrams])
-    return list(repeatable_substrings)
-
 
 # def search_best_primer(sequences):
 #     ref = ''
@@ -933,5 +899,5 @@ def find_repeatable_substrings(string):
 
 
 if __name__ == "__main__":
-    main()
+    main(args)
 
