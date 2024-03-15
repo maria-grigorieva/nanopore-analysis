@@ -128,9 +128,9 @@ def main(args):
     APTAMERS = filter_aptamers()
 
     for item in APTAMERS:
-        aptamer = item['aptamer'][:APTAMER_LENGTH] if PRIMER_TYPE == 'right' else item['aptamer'][:PRIMER_LENGTH]
+        aptamer = item['aptamer'][:APTAMER_LENGTH] if PRIMER_TYPE == 'right' else item['aptamer'][PRIMER_LENGTH:]
         primer = item['aptamer'][APTAMER_LENGTH:APTAMER_LENGTH + PRIMER_LENGTH] \
-            if PRIMER_TYPE == 'right' else item['aptamer'][PRIMER_LENGTH:PRIMER_LENGTH + APTAMER_LENGTH]
+            if PRIMER_TYPE == 'right' else item['aptamer'][:PRIMER_LENGTH]
         stats = item['stats_volume']
         occurences = calculate_occurences(seq_list, aptamer)
         if occurences > 0:
@@ -813,25 +813,43 @@ def move_slicing_window(seq_list, reference, init_ref,
 
     def update_window(bifurcation, direction):
         nonlocal reference
+        current_reference = reference['seq']
+        current_start_pos = reference['start_pos']
         if FLEXIBLE_SHIFTS:
             p = reference['freq'].max().tolist()
             high_seq = highest_probability_sequence(reference['freq'])
             max_p = maximized_probabilities(p)
             if PRIMER_TYPE == 'right' and direction == -1:
-                max_p = [num for num in max_p if num + PRIMER_LENGTH > left_limit + 1]
+                max_p = [num for num in max_p if num + PRIMER_LENGTH >= left_limit + 1]
             elif PRIMER_TYPE == 'right' and direction == 1:
-                max_p = [num for num in max_p if num + PRIMER_LENGTH < right_limit - 1]
+                max_p = [num for num in max_p if num <= right_limit - 1]
+            if PRIMER_TYPE == 'left' and direction == -1:
+                max_p = [num for num in max_p if num >= left_limit + 1]
+            elif PRIMER_TYPE == 'left' and direction == 1:
+                max_p = [num for num in max_p if num <= right_limit - 1]
             if len(max_p) > 0:
                 shift = np.min(max_p) if direction == -1 else np.max(max_p)
-                new_ref = high_seq[shift:shift+REFERENCE_LENGTH] if direction == -1 else \
-                                   high_seq[shift:REFERENCE_LENGTH + shift]
-                new_start_pos = shift + PRIMER_LENGTH if direction == -1 else shift + PRIMER_LENGTH
-                if direction == -1 or PRIMER_LENGTH + APTAMER_LENGTH - new_start_pos > REFERENCE_LENGTH:
-                    reference['seq'] = new_ref
-                    reference['start_pos'] = new_start_pos
-                if direction == 1:
-                    reference['seq'] = new_ref
-                    reference['start_pos'] = new_start_pos
+                if PRIMER_TYPE == 'right':
+                    new_ref = high_seq[shift:shift + REFERENCE_LENGTH]
+                elif PRIMER_TYPE == 'left':
+                    new_ref = high_seq[shift:shift + REFERENCE_LENGTH] if direction == -1 else \
+                        high_seq[shift - REFERENCE_LENGTH+1:shift+1]
+                if PRIMER_TYPE == 'right':
+                    new_start_pos = shift + PRIMER_LENGTH
+                elif PRIMER_TYPE == 'left':
+                    new_start_pos = shift if direction == -1 else shift - REFERENCE_LENGTH + 1
+                if (direction == -1 and new_start_pos < current_start_pos) or \
+                    (direction == 1 and new_start_pos > current_start_pos):
+                    if PRIMER_TYPE == 'right':
+                        if direction == -1 or PRIMER_LENGTH + APTAMER_LENGTH - new_start_pos > REFERENCE_LENGTH:
+                            reference['seq'] = new_ref
+                            reference['start_pos'] = new_start_pos
+                        if direction == 1:
+                            reference['seq'] = new_ref
+                            reference['start_pos'] = new_start_pos
+                    elif PRIMER_TYPE == 'left' or right_limit - new_start_pos > REFERENCE_LENGTH:
+                        reference['seq'] = new_ref
+                        reference['start_pos'] = new_start_pos
         try:
             reference = update_reference(seq_list,
                                          reference,
