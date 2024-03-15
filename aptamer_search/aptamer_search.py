@@ -15,8 +15,6 @@ from Bio import pairwise2
 from visualization import plot_probabilities
 from Bio.pairwise2 import format_alignment
 
-
-
 # Define the argument parser
 parser = argparse.ArgumentParser(description='Search an aptamer among low-quality sequences with known length and primers')
 
@@ -36,7 +34,8 @@ args_info = [
     ['-ph', '--cutoff', int, 'Phred score cut off', 15],
     ['-flex', '--flexible_shifts', bool, 'Flexible slicing window (improves performance, but decreases accuracy)', False],
     ['-nbif', '--number_of_bifurcations', int, 'Max number of bifurcations', 10],
-    ['-psim', '--primer_similarity', bool, 'Check correctness of primer position', False]
+    ['-psim', '--primer_similarity', bool, 'Check correctness of primer position', False],
+    ['-stype', '--similarity_mode', str, 'Choose type of sequences similarity: levenshtein, biopython', 'levenshtein']
 ]
 
 # Add arguments to the parser
@@ -70,6 +69,7 @@ PHRED_CUTOFF = args.cutoff
 FLEXIBLE_SHIFTS = args.flexible_shifts
 N_BIFURCATIONS = args.number_of_bifurcations
 PRIMER_SIMILARITY = args.primer_similarity
+SIMILARITY_MODE = args.similarity_mode
 
 # Set all variations of primers
 R_PL, R_PR = PL[::-1], PR[::-1]
@@ -135,8 +135,10 @@ def main(args):
         occurences = calculate_occurences(seq_list, aptamer)
         if occurences > 0:
             primer_value = PR if PRIMER_TYPE == 'right' else PL
+            # primer_c_value = C_PR if PRIMER_TYPE == 'right' else C_PL
             tmp = []
-            similarity_score = pairwise_similarity(primer_value, primer, tmp)
+            similarity_score = fuzz.ratio(primer_value, primer) if SIMILARITY_MODE == 'levenshtein' \
+                        else pairwise_similarity(primer_value, primer, tmp)
             logging.info(f'{aptamer} -- {primer} based on average statistics of {stats} sequences')
             logging.info(f'with primer similarity score = {similarity_score} and {occurences} number of occurences.')
 
@@ -221,36 +223,37 @@ def searching(ref, seq_list, bifurcation=None):
     # reference = ref
 
     logging.info('Moving slicing window...')
-    try:
-        move_slicing_window(seq_list,
-                            ref.copy(),
-                            ref,
-                            probabilities,
-                            weights_list,
-                            steps_writer,
-                            bifurcation,
-                            plots_directory,
-                            stats_volume)
+    # try:
+    move_slicing_window(seq_list,
+                        ref.copy(),
+                        ref,
+                        probabilities,
+                        weights_list,
+                        steps_writer,
+                        bifurcation,
+                        plots_directory,
+                        stats_volume)
 
-        if SAVE_FILES:
-            steps_writer.close()
+    if SAVE_FILES:
+        steps_writer.close()
 
-        # Create an empty dictionary to store the merged data
-        merged_data = merging_probabilities(probabilities)
-        # Create an empty dict to store the merged weights data
-        weights_df = pd.concat(weights_list)
-        #weights_df = scale_dataframe(weights_df)
-        weights_df.reset_index(drop=True, inplace=True)
+    # Create an empty dictionary to store the merged data
+    merged_data = merging_probabilities(probabilities)
+    # Create an empty dict to store the merged weights data
+    weights_df = pd.concat(weights_list)
+    #weights_df = scale_dataframe(weights_df)
+    weights_df.reset_index(drop=True, inplace=True)
 
-        logging.info(f'Calculating statistics...')
-        result = calculate_statistics(merged_data, ref, weights_df, output)
-        APTAMERS.append({'aptamer': result,
-                        'stats_volume': np.mean(stats_volume)})
+    logging.info(f'Calculating statistics...')
+    result = calculate_statistics(merged_data, ref, weights_df, output)
+    APTAMERS.append({'aptamer': result,
+                    'stats_volume': np.mean(stats_volume)})
 
-        return result
-    except:
-        logging.error('Moving slicing window has stopped!')
-        return None
+    return result
+    # except:
+    #     logging.error('Moving slicing window has stopped!')
+    #     return None
+
 
 def calculate_statistics(merged_data, ref, weights_df, output):
 
@@ -301,7 +304,7 @@ def calculate_statistics(merged_data, ref, weights_df, output):
     result_75 = infer_sequence('0.75', final_composition_high_df, ref, f'{output}/shifts')
     result_max = infer_sequence('max', final_composition_max_df, ref, f'{output}/shifts')
 
-    return result_max
+    return result_75
 
 def weighted_statistics(df_A, df_B, threshold=0.4):
     statistics = {
@@ -409,11 +412,16 @@ def extract_segment(sequence, score, pattern, matches, scores, remove_incorrect=
             if remove_incorrect:
                 position = 0 if PRIMER_TYPE == 'left' else APTAMER_LENGTH
                 primer = PR if PRIMER_TYPE == 'right' else PL
+                primer_c = C_PR if PRIMER_TYPE == 'right' else C_PL
                 #if calculate_similarity(s[position:position+PRIMER_LENGTH],primer) >= threshold:
                 # if pairwise_similarity(s[position:position + PRIMER_LENGTH], primer, None) >= threshold:
                 if fuzz.ratio(s[position:position+PRIMER_LENGTH],primer) >= threshold:
                     matches.append(s)
                     scores.append(score[i['start']:i['end']])
+                if COMPLEMENT:
+                    if fuzz.ratio(s[position:position + PRIMER_LENGTH], primer_c) >= threshold:
+                        matches.append(s)
+                        scores.append(score[i['start']:i['end']])
             else:
                 matches.append(s)
                 scores.append(score[i['start']:i['end']])
@@ -632,35 +640,37 @@ def update_reference(seq_list, reference, bifurcation, direction = -1):
             logging.warning(f'{ref_name}: No sequences with reference {ref_name} as position {new_start} have been found')
             continue
 
-    # if bifurcation is None:
-    alternative = bifurcation_search(refs)
-    if alternative is not None:
-        for a in alternative:
-            passed = False
-            for item in BIFURCATIONS:
-                if item['seq'] == a['seq'] and item['start_pos'] == a['start_pos']:
-                    passed = True
+    if len(refs) > 0:
+        alternative = bifurcation_search(refs)
+        if alternative is not None:
+            for a in alternative:
+                passed = False
+                for item in BIFURCATIONS:
+                    if item['seq'] == a['seq'] and item['start_pos'] == a['start_pos']:
+                        passed = True
+                        break
+                if not passed:
+                    BIFURCATIONS.append(a)
+
+        # first try to find item in bifurcation, if it is not a bifurcation, then get max
+        res = {}
+        if bifurcation is not None:
+            for item in refs:
+                if item['seq'] == bifurcation['seq'] and item['start_pos'] == bifurcation['start_pos']:
+                    res = item
                     break
-            if not passed:
-                BIFURCATIONS.append(a)
+        if not res:
+            res = max(refs, key=lambda x: x['hits'])
 
-    # first try to find item in bifurcation, if it is not a bifurcation, then get max
-    res = {}
-    if bifurcation is not None:
-        for item in refs:
-            if item['seq'] == bifurcation['seq'] and item['start_pos'] == bifurcation['start_pos']:
-                res = item
-                break
-    if not res:
-        res = max(refs, key=lambda x: x['hits'])
+        build_tree(bifurcation, direction, refs, res)
 
-    build_tree(bifurcation, direction, refs, res)
+        logging.info(
+            f'''{len(res['sequences'])} have been selected with {res['seq']} at {res['start_pos']}''')
+        logging.info('*******************************************************************************')
 
-    logging.info(
-        f'''{len(res['sequences'])} have been selected with {res['seq']} at {res['start_pos']}''')
-    logging.info('*******************************************************************************')
-
-    return res
+        return res
+    else:
+        return None
 
 def build_tree(bifurcation, direction, refs, res):
     # add refernces to TREE
@@ -686,8 +696,8 @@ def build_tree(bifurcation, direction, refs, res):
                       and item['direction'] == 'left'), None)
             prev_start_pos = y if y is not None else bifurcation['start_pos']
         elif direction == 1:
-            x = next(([item['prev_seq'],item['prev_start_pos']] for item in reversed(TREE) if item.get('passed', True) and item['path'] == path \
-                      and item['direction'] == 'right'),
+            x = next((item['prev_seq'] for item in reversed(TREE) if item.get('passed', True) \
+                      and item['path'] == path and item['direction'] == 'right'),
                      None)
             if x is not None:
                 prev_seq = x if x is not None else bifurcation['seq']
@@ -702,7 +712,7 @@ def build_tree(bifurcation, direction, refs, res):
                 else:
                     prev_seq, prev_start_pos = bifurcation['seq'], bifurcation['start_pos']
 
-    def add_bifurcation(refs):
+    def add_bifurcation(refs, res):
         for ref in refs:
             tmp = {key: value for key, value in ref.items() if key in selected_keys}
             if direction == -1:
@@ -724,9 +734,9 @@ def build_tree(bifurcation, direction, refs, res):
             TREE.append(tmp)
 
     if bifurcation is None:
-        add_bifurcation(refs)
+        add_bifurcation(refs, res)
     else:
-        add_bifurcation(refs)
+        add_bifurcation(refs, res)
 
 
 def evaluate_sequences_correctness(ref_name, sequences, scores):
@@ -735,21 +745,23 @@ def evaluate_sequences_correctness(ref_name, sequences, scores):
     aligned_primers = []
     position = 0 if PRIMER_TYPE == 'left' else APTAMER_LENGTH
     primer = PR if PRIMER_TYPE == 'right' else PL
+    # primer_c = C_PR if PRIMER_TYPE == 'right' else C_PL
     for idx, row in enumerate(sequences):
         s = ''.join(row)
-        seq.append(pairwise_similarity(s[position:position+PRIMER_LENGTH], primer, aligned_primers)/100)
-        #seq.append(round(fuzz.ratio(s[position:position+PRIMER_LENGTH], primer)/100,4))
+        similarity = round(fuzz.ratio(s[position:position+PRIMER_LENGTH], primer)/100,4) if SIMILARITY_MODE == 'levenshtein' \
+                     else round(pairwise_similarity(s[position:position+PRIMER_LENGTH], primer, aligned_primers)/100,4)
+        seq.append(similarity)
         #sc.append(1 - np.mean([pow(10, -i/10) for i in scores[idx][position:position+PRIMER_LENGTH]]))
         #res = [np.mean([a,b]) for a, b in zip(seq, sc)]
-    mean_sim_score = round(np.mean([i.score for i in aligned_primers]))
+    #mean_sim_score = round(np.mean([i.score for i in aligned_primers]))
     n_seqs = len(sequences)
     primer_score = np.mean(seq)
     hits = n_seqs * primer_score
     logging.info(f'{ref_name}: Number of sequences is {n_seqs}, correctness = {primer_score}, hits = {hits}')
     # Find the element with the closest 'c' value to the average
-    closest_element = min(aligned_primers, key=lambda x: abs(x.score - mean_sim_score))
-    for s in format_alignment(*closest_element).split('\n'):
-        logging.info(s)
+    # closest_element = min(aligned_primers, key=lambda x: abs(x.score - mean_sim_score))
+    # for s in format_alignment(*closest_element).split('\n'):
+    #     logging.info(s)
     return primer_score
 
 def pairwise_similarity(string1, primer, aligned_primers=None):
@@ -820,21 +832,25 @@ def move_slicing_window(seq_list, reference, init_ref,
                 if direction == 1:
                     reference['seq'] = new_ref
                     reference['start_pos'] = new_start_pos
-        reference = update_reference(seq_list,
-                                     reference,
-                                     bifurcation,
-                                     direction=direction)
-        reference['freq'] = calculate_probabilities(reference['sequences'])
-        weights = calculate_weights(reference['scores'])
-        stats_volume.append(reference['n_seqs'])
+        try:
+            reference = update_reference(seq_list,
+                                         reference,
+                                         bifurcation,
+                                         direction=direction)
+            reference['freq'] = calculate_probabilities(reference['sequences'])
+            weights = calculate_weights(reference['scores'])
+            stats_volume.append(reference['n_seqs'])
 
-        if SAVE_FILES:
-            write_steps_excel(reference, writer)
+            if SAVE_FILES:
+                write_steps_excel(reference, writer)
 
-        probabilities.append(reference['freq'])
-        weights_list.append(weights)
+            probabilities.append(reference['freq'])
+            weights_list.append(weights)
 
-        plot_probabilities(reference, output)
+            plot_probabilities(reference, output)
+        except:
+            logging.warning('There are no sequences... Changing direction! ')
+            reference = {'seq': 'X', 'start_pos': left_limit if direction == -1 else right_limit}
 
     # if PRIMER_TYPE == 'right':
     logging.info("===============================================================================")
@@ -842,8 +858,11 @@ def move_slicing_window(seq_list, reference, init_ref,
     logging.info("===============================================================================")
     pbar = tqdm.tqdm(total=(reference['start_pos'] - left_limit))
     while reference['start_pos'] > left_limit + 1:
-        update_window(bifurcation, direction=-1)
-        pbar.update(1)  # Increment the progress bar by 1
+        try:
+            update_window(bifurcation, direction=-1)
+            pbar.update(1)  # Increment the progress bar by 1
+        except:
+            break
     pbar.close()  # Close the progress bar once the loop is finished
 
     reference.clear()
