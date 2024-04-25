@@ -14,7 +14,8 @@ from Bio import pairwise2
 from Bio.Seq import Seq
 from fuzzywuzzy import fuzz
 
-from visualization import plot_probabilities
+from visualization import plot_probabilities, create_image_with_colored_sequence
+import barcodes
 
 # Define the argument parser
 parser = argparse.ArgumentParser(
@@ -38,7 +39,8 @@ args_info = [
      False],
     ['-nbif', '--number_of_bifurcations', int, 'Max number of bifurcations', 10],
     ['-psim', '--primer_similarity', bool, 'Check correctness of primer position', False],
-    ['-stype', '--similarity_mode', str, 'Choose type of sequences similarity: levenshtein, biopython', 'levenshtein']
+    ['-stype', '--similarity_mode', str, 'Choose type of sequences similarity: levenshtein, biopython', 'levenshtein'],
+    ['-bar', '--barcodes', str, 'Barcodes', None]
 ]
 
 # Add arguments to the parser
@@ -73,6 +75,7 @@ FLEXIBLE_SHIFTS = args.flexible_shifts
 N_BIFURCATIONS = args.number_of_bifurcations
 PRIMER_SIMILARITY = args.primer_similarity
 SIMILARITY_MODE = args.similarity_mode
+BARCODES = args.barcodes.split(',')
 
 # Set all variations of primers
 R_PL, R_PR = PL[::-1], PR[::-1]
@@ -147,7 +150,6 @@ def main(args):
             logging.info(f'with primer similarity score = {similarity_score} and {occurences} number of occurences.')
 
     pd.DataFrame(TREE).to_csv(f'{OUTPUT_DIR}/tree.csv')
-
 
 def calculate_occurences(seq_list, candidate):
     return sum(i['sequence'].count(candidate) for i in seq_list)
@@ -379,6 +381,10 @@ def generate_fastq_file(data, output_filename):
         score = item['score']
         record_id = str(uuid.uuid4())
         record = SeqIO.SeqRecord(Seq(sequence), id=record_id, name='', description='')
+        # print(sequence)
+        # print(len(sequence))
+        # print(score)
+        # print(len(score))
         record.letter_annotations["phred_quality"] = score
         records.append(record)
 
@@ -394,6 +400,7 @@ def get_sequences():
     records = list(SeqIO.parse(FILE_PATH, "fastq"))
     logging.info(f'Initial number of records in {FILE_PATH}: {len(records)}')
     logging.info('Reading file...')
+
     for rec in tqdm.tqdm(records, total=len(list(records)), leave=False, desc=FILE_PATH):
         sequence = str(rec.seq)
         score = rec.letter_annotations["phred_quality"]
@@ -404,8 +411,11 @@ def get_sequences():
         else:
             results.append({'sequence': sequence,
                             'score': score})
+
+    results = barcodes.sequences_without_barcodes(results, BARCODES)
+
     logging.info(f'{len(results)} sequences have been read!')
-    # create_image_with_colored_sequence(results[0:1000], f'{OUTPUT_DIR}/internal.png')
+    create_image_with_colored_sequence(results[0:1000], f'{OUTPUT_DIR}/internal.png')
     generate_fastq_file(results, f'{OUTPUT_DIR}/internal.fastq')
     logging.info(f'Internal fastq file has been written.')
 
