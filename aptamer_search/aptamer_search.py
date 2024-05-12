@@ -81,10 +81,6 @@ RC_PL, RC_PR = C_PL[::-1], C_PR[::-1]
 
 PRIMERS = [{"primer_type": "PR", "primer_value": PR, "number_of_occurences": 0},
            {"primer_type": "PL", "primer_value": PL, "number_of_occurences": 0},
-           # {"primer_type": "R_PL", "primer_value": R_PL, "number_of_occurences": 0},
-           # {"primer_type": "R_PR", "primer_value": R_PR, "number_of_occurences": 0},
-           # {"primer_type": "C_PL", "primer_value": C_PL, "number_of_occurences": 0},
-           # {"primer_type": "C_PR", "primer_value": C_PR, "number_of_occurences": 0},
            {"primer_type": "RC_PR", "primer_value": RC_PR, "number_of_occurences": 0},
            {"primer_type": "RC_PL", "primer_value": RC_PL, "number_of_occurences": 0}]
 
@@ -98,6 +94,28 @@ BIFURCATIONS = []
 APTAMERS = []
 # fasta_output = []
 
+probabilities = ["N", "N1", "N", "N1", "N", "N1", "N", "N1", "N2", "N2", "N2", "N2", "N", "N1", "N", "N1", "N", "N1", "N", "N1", "N", "N1", "N2", "N2", "N2", "N", "N1", "N", "N1", "N", "N1"]
+#%%
+
+decoding_rules = {
+    "N": {"A": 0.45, "C": 0.05, "G": 0.45, "T": 0.05},
+    "N1": {"A": 0.05, "C": 0.45, "G": 0.05, "T": 0.45},
+    "N2": {"A": 0.25, "C": 0.25, "G": 0.25, "T": 0.25}
+         }
+#%%
+
+decoded_probabilities = {}
+
+# Decoding the probabilities
+for i, prob in enumerate(probabilities):
+    for nucleotide, value in decoding_rules[prob].items():
+        if nucleotide not in decoded_probabilities:
+            decoded_probabilities[nucleotide] = []
+        decoded_probabilities[nucleotide].append(value)
+
+# Creating a pandas DataFrame
+decoded_probabilities = pd.DataFrame(decoded_probabilities).T
+avg_max_initial_prob = pd.Series([decoded_probabilities[column].max() for column in decoded_probabilities.columns]).mean()
 
 def main(args):
     get_glued_primers_combinations(length=7)
@@ -112,18 +130,19 @@ def main(args):
     # first cycle
     searching(INIT_REFERENCE, seq_list)
 
-    # iterate over all detected bifurcations
-    for idx, b in enumerate(BIFURCATIONS):
-        if idx <= N_BIFURCATIONS:
-            logging.info('===============================================================================')
-            logging.info('===============================================================================')
-            filtered_b = {key: value for key, value in b.items() if key in ['seq', 'start_pos']}
-            logging.info(f'Next passage with bifurcation: {filtered_b}')
-            # bifurcation as the initial reference
-            INIT_REFERENCE = initialize(seq_list, b['seq'], b['complement'], b['start_pos'])
-            # INIT_REFERENCE = initialize(seq_list, REFERENCE, str(Seq(PR).complement()[::-1][0:REFERENCE_LENGTH]), START_POS)
-            searching(INIT_REFERENCE, seq_list, b)
-            # print(BIFURCATIONS)
+    if N_BIFURCATIONS > 0:
+        # iterate over all detected bifurcations
+        for idx, b in enumerate(BIFURCATIONS):
+            if idx <= N_BIFURCATIONS-1:
+                logging.info('===============================================================================')
+                logging.info('===============================================================================')
+                filtered_b = {key: value for key, value in b.items() if key in ['seq', 'start_pos']}
+                logging.info(f'Next passage with bifurcation: {filtered_b}')
+                # bifurcation as the initial reference
+                INIT_REFERENCE = initialize(seq_list, b['seq'], b['complement'], b['start_pos'])
+                # INIT_REFERENCE = initialize(seq_list, REFERENCE, str(Seq(PR).complement()[::-1][0:REFERENCE_LENGTH]), START_POS)
+                searching(INIT_REFERENCE, seq_list, b)
+                # print(BIFURCATIONS)
 
     logging.info('===============================================================================')
     logging.info('===============================================================================')
@@ -136,6 +155,11 @@ def main(args):
         primer = item['aptamer'][APTAMER_LENGTH:APTAMER_LENGTH + PRIMER_LENGTH] \
             if PRIMER_TYPE == 'right' else item['aptamer'][:PRIMER_LENGTH]
         stats = item['stats_volume']
+        max_probabilities = item['probabilities'].max()
+        average_probability = max_probabilities.mean()
+        # Extract the probabilities of each nucleotide from the list x at each position
+        match = pd.Series([decoded_probabilities.T[letter][idx] for idx, letter in enumerate(list(aptamer))]).mean()
+
         occurences = calculate_occurences(seq_list, aptamer)
         if occurences > 0:
             primer_value = PR if PRIMER_TYPE == 'right' else PL
@@ -144,7 +168,9 @@ def main(args):
             similarity_score = fuzz.ratio(primer_value, primer) if SIMILARITY_MODE == 'levenshtein' \
                 else pairwise_similarity(primer_value, primer, tmp)
             logging.info(f'{aptamer} -- {primer} based on median statistics of {stats} sequences')
-            logging.info(f'with primer similarity score = {similarity_score} and {occurences} number of occurences.')
+            logging.info(f'with primer similarity score = {similarity_score} and {occurences} number of occurences;')
+            logging.info(f'Average probability: {average_probability}')
+            logging.info(f'Match with the expected probabilities: {match/avg_max_initial_prob}')
 
     pd.DataFrame(TREE).to_csv(f'{OUTPUT_DIR}/tree.csv')
 
@@ -254,8 +280,9 @@ def searching(ref, seq_list, bifurcation=None):
     weights_df.reset_index(drop=True, inplace=True)
 
     logging.info(f'Calculating statistics...')
-    result = calculate_statistics(merged_data, ref, weights_df, output)
+    probabilities_df, result = calculate_statistics(merged_data, ref, weights_df, output)
     APTAMERS.append({'aptamer': result,
+                     'probabilities': probabilities_df,
                      'stats_volume': np.median(stats_volume)})
 
 
@@ -313,13 +340,15 @@ def calculate_statistics(merged_data, ref, weights_df, output):
 
         weights_df.to_excel(output_writer, sheet_name='Weights', index=True, header=True)
 
+        decoded_probabilities.to_excel(output_writer, sheet_name='Initial Probabilities', index=True, header=True)
+
         output_writer.close()
 
     result_median = infer_sequence('median', final_composition_median_df, ref, f'{output}/shifts')
     result_75 = infer_sequence('0.75', final_composition_high_df, ref, f'{output}/shifts')
     result_max = infer_sequence('max', final_composition_max_df, ref, f'{output}/shifts')
 
-    return result_75
+    return final_composition_median_df, result_median
 
 
 def weighted_statistics(df_A, df_B, threshold=0.4):
