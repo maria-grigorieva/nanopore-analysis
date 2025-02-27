@@ -35,14 +35,20 @@ pip install pandas matplotlib numpy biopython
      
      Replace `<input_directory>` with the path to the directory containing the input data.
 
-3. Optional arguments:
-   - `-al, --alen`: Length of the aptamer (default: 31)
-   - `-pl, --plen`: Length of the primer (default: 20)
-   - `-i, --input`: Directory with input data (default: 'input_data')
-   - `-rl, --reflen`: Initial reference length (default: 9)
-   - `-r, --ref`: Initial reference sequence (default: 'auto')
-   - `-p, --pos`: Start position of the reference sequence (default: -1)
-   - `-s, --save`: Save results to excel (default: False)
+3. Arguments:
+   - `-al, --alen`, int, 'Length of an aptamer', (default: 31)
+   - `-i, --input`, str, 'Path to the input fastq file', (default: 'input_data')
+   - `-o, --output`, str, 'Directory with output data', (default :'../results')
+   - `-pl, --left_primer`, str, 'Left Primer'
+   - `-pr, --right_primer`, str, 'Right Primer'
+   - `-r, --ref`, str, 'Initial reference sequence'
+   - `-p, --pos`, int, 'Start position of the reference sequence', (default: -1)
+   - `-f, --fuzzy`, bool, 'Add fuzzy search', (default: False)
+   - `-s, --save`, bool, 'Save to excel (True/False)', (default: False)
+   - `-c, --complement`, bool, 'Add complementary primer', (default: False)
+   - `-w, --weights`, bool, 'Take into account nucleotide phred scores', (default: False)
+   - `-ph, --cutoff`, int, 'Phred score cut off', (default: 15)
+   - `-flex, --flexible_shifts`, bool, 'Flexible slicing window (improves performance, but decreases accuracy)'
 
 4. Output:
    - The code will output information about the analysis steps and the selected aptamer candidates.
